@@ -1,66 +1,632 @@
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import DateFilter from './DateFilter';
 import './Analytics.css';
 import './WeeklyReport.css';
-type Report = {report_id:number;date_from:string;date_to:string;expected_penalty:string;expected_deduction:string;penalty:string;deduction:string;status:string;loaded_rows:number;last_error:string|null;updated_at:string};
-type Product = {identifier:string;operations:number;penalty:string;deduction:string};
-type Group = {kind:string;reason:string;attribution:string;rows:number;amount:string};
-const rub=(v:string|number)=>`${Number(v).toLocaleString('ru-RU',{minimumFractionDigits:2,maximumFractionDigits:2})} ₽`;
-const api=`${window.location.protocol}//${window.location.hostname}:8000`;
-const status:Record<string,string>={queued:'В очереди',loading:'Загружается',retry:'Повтор запроса',complete:'Сверено',mismatch:'Расхождение'};
-type Daily = {report_id:number;report_date:string;report_type:number;status:string;loaded_rows:number;last_error:string|null;
- retail:string;for_pay:string;commission:string;vat:string;acquiring:string;logistics:string;storage:string;acceptance:string;
- penalty:string;deduction:string;additional_payment:string;expected_bank_payment:string};
-type DailyReason = {reason:string;operation:string;attribution:string;rows:number;penalty:string;deduction:string;logistics:string;storage:string;acceptance:string};
-export default function WeeklyReport(){
- const [mode,setMode]=useState<'daily'|'weekly'>('daily');
- const [dayFrom,setDayFrom]=useState(()=>{const d=new Date();d.setDate(d.getDate()-7);return d.toLocaleDateString('en-CA')});
- const [dayTo,setDayTo]=useState(()=>{const d=new Date();d.setDate(d.getDate()-1);return d.toLocaleDateString('en-CA')});
- const [daily,setDaily]=useState<Daily[]>([]);
- const [dailySelected,setDailySelected]=useState<number|null>(null);
- const [dailyReasons,setDailyReasons]=useState<DailyReason[]>([]);
- const [reports,setReports]=useState<Report[]>([]);
- const [selected,setSelected]=useState<number|null>(null);
- const [groups,setGroups]=useState<Group[]>([]);
- const [products,setProducts]=useState<Product[]>([]);
- const [busy,setBusy]=useState(false);
- const [error,setError]=useState('');
- const load=useCallback(async()=>{try{const r=await fetch(`${api}/analytics/wb-finance/reports`,{credentials:'include'});if(!r.ok)throw new Error(`HTTP ${r.status}`);const data=await r.json();setReports(data.items||[]);}catch(e){setError(String(e));}},[]);
- useEffect(()=>{void load();const timer=setInterval(()=>void load(),60000);return()=>clearInterval(timer)},[load]);
- useEffect(()=>{if(selected===null){setGroups([]);setProducts([]);return;}let alive=true;setBusy(true);fetch(`${api}/analytics/wb-finance/reports/${selected}`,{credentials:'include'}).then(async r=>{if(!r.ok)throw new Error(`HTTP ${r.status}`);return r.json()}).then(d=>{if(alive){setGroups(d.groups||[]);setError('');void fetch(`${api}/analytics/wb-finance/reports/${selected}/products`,{credentials:'include'}).then(r=>r.json()).then(p=>{if(alive)setProducts(p.items||[])}).catch(()=>{})}}).catch(e=>{if(alive)setError(String(e))}).finally(()=>{if(alive)setBusy(false)});return()=>{alive=false}},[selected]);
- useEffect(()=>{if(mode!=='daily'||!dayFrom||!dayTo||dayFrom>dayTo)return;let active=true;
- const loadDaily=()=>fetch(`${api}/analytics/wb-finance/daily?date_from=${dayFrom}&date_to=${dayTo}`,{credentials:'include'})
- .then(async r=>{if(!r.ok)throw Error(`HTTP ${r.status}`);return r.json()})
- .then(d=>{if(active)setDaily(d.items||[])}) .catch(e=>{if(active)setError(String(e))});
- void loadDaily();const timer=setInterval(()=>void loadDaily(),60000);
- return()=>{active=false;clearInterval(timer)}},[mode,dayFrom,dayTo]);
- useEffect(()=>{if(dailySelected===null)return;let active=true;
- fetch(`${api}/analytics/wb-finance/daily/${dailySelected}/reasons`,{credentials:'include'})
- .then(r=>r.json()).then(d=>{if(active)setDailyReasons(d.items||[])})
- .catch(e=>{if(active)setError(String(e))});return()=>{active=false}},[dailySelected]);
- const dailyReport=daily.find(r=>r.report_id===dailySelected);
- const detail=reports.find(r=>r.report_id===selected);
- return <div className="analytics-page"><div className="analytics-header"><div><h1>Финансовые отчёты</h1><p>Ежедневный оперативный контроль и недельная финансовая сверка Wildberries.</p></div></div>
- <div className="weekly-mode"><button className={mode==='daily'?'active':''} onClick={()=>setMode('daily')}>Ежедневные</button><button className={mode==='weekly'?'active':''} onClick={()=>setMode('weekly')}>Еженедельные</button></div>
- {mode==='daily'&&<section className="weekly-finance"><header><h2>Ежедневные отчёты WB</h2><span>Даты финансовых отчётов, не даты заказов</span></header>
- <div className="weekly-dates"><label>С <input type="date" value={dayFrom} onChange={e=>setDayFrom(e.target.value)}/></label><label>По <input type="date" value={dayTo} onChange={e=>setDayTo(e.target.value)}/></label></div>
- {error&&<p role="alert" className="weekly-error">{error}</p>}
- {!daily.length?<p>За выбранный период пока нет отчётов. Ежедневная загрузка выполняется фоново после формирования отчёта WB.</p>:<div className="weekly-table-wrap"><table><thead><tr><th>Дата отчёта</th><th>Тип</th><th>Реализация</th><th>К перечислению за товар</th><th>Штрафы</th><th>Удержания</th><th>Статус</th></tr></thead><tbody>{daily.map(r=><tr key={r.report_id} className={dailySelected===r.report_id?'selected':''} onClick={()=>setDailySelected(r.report_id)}><td>{r.report_date}</td><td>{r.report_type===2?'По выкупам':'Основной'}</td><td>{rub(r.retail)}</td><td>{rub(r.for_pay)}</td><td>{rub(r.penalty)}</td><td>{rub(r.deduction)}</td><td>{status[r.status]||r.status}</td></tr>)}</tbody></table></div>}
- {dailyReport&&<div className="weekly-detail"><h3>Отчёт №{dailyReport.report_id} · {dailyReport.report_type===2?'По выкупам':'Основной'}</h3>
- {dailyReport.status!=='complete'&&<p className="weekly-error">Суммы предварительные: полная сверка пока не завершена. Банковский итог взят из сводки WB.</p>}
- <div className="weekly-daily-summary">{[
- ['Реализация',dailyReport.retail],['Комиссия WB без НДС',dailyReport.commission],['НДС на комиссию',dailyReport.vat],['Эквайринг',dailyReport.acquiring],['К перечислению за товар',dailyReport.for_pay],['Логистика',dailyReport.logistics],['Хранение',dailyReport.storage],['Платная приёмка',dailyReport.acceptance],['Штрафы',dailyReport.penalty],['Удержания',dailyReport.deduction],['Доплаты',dailyReport.additional_payment],['Итого к оплате (сводка WB)',dailyReport.expected_bank_payment]
- ].map(([label,value])=><div key={label}><span>{label}</span><strong>{rub(value)}</strong></div>)}</div>
- <h3>Обоснования расходов (до 250 групп)</h3><div className="weekly-table-wrap"><table><thead><tr><th>Основание</th><th>Привязка</th><th>Строк</th><th>Логистика</th><th>Штрафы</th><th>Удержания</th></tr></thead><tbody>{dailyReasons.map((r,i)=><tr key={i}><td>{r.reason}</td><td>{r.attribution==='sku_candidate'?'Кандидат на SKU':'Общий / без SKU'}</td><td>{r.rows}</td><td>{rub(r.logistics)}</td><td>{rub(r.penalty)}</td><td>{rub(r.deduction)}</td></tr>)}</tbody></table></div>
- <p className="weekly-note">Обязательства по ежедневным отчётам предварительные. Типы отчётов отображаются отдельно; их нельзя складывать с недельными итогами. Наличие SKU не гарантирует корректное отнесение расходов на товар.</p>
- </div>}</section>}
- {mode==='weekly'&&<>
- <section className="weekly-finance"><header><h2>Отчёты WB</h2><button onClick={()=>void load()}>Обновить</button></header>
- {error&&<p role="alert" className="weekly-error">{error}</p>}
- {!reports.length?<p>Отчёты ещё не загружены. Фоновая загрузка начнётся после запуска backend; статус обновляется автоматически.</p>:
- <div className="weekly-table-wrap"><table><thead><tr><th>Неделя</th><th>Отчёт</th><th>Штрафы</th><th>Удержания</th><th>Статус</th></tr></thead><tbody>{reports.map(r=><tr key={r.report_id} className={selected===r.report_id?'selected':''} onClick={()=>setSelected(r.report_id)}><td>{r.date_from} — {r.date_to}</td><td>{r.report_id}</td><td>{rub(r.penalty)} / {rub(r.expected_penalty)}</td><td>{rub(r.deduction)} / {rub(r.expected_deduction)}</td><td>{status[r.status]||r.status}</td></tr>)}</tbody></table></div>}
- {detail&&<div className="weekly-detail"><h3>Отчёт №{detail.report_id}</h3><p>Строк: {detail.loaded_rows.toLocaleString('ru-RU')} · {status[detail.status]||detail.status}. {detail.last_error||''}</p>
- {detail.status!=='complete'&&<p className="weekly-error">Данные предварительные, финансовая сверка ещё не подтверждена.</p>}
- {busy?<p>Загрузка детализации…</p>:<div className="weekly-table-wrap"><table><thead><tr><th>Тип</th><th>Причина</th><th>Привязка</th><th>Операций</th><th>Сумма</th></tr></thead><tbody>{groups.map((g,i)=><tr key={i}><td>{g.kind}</td><td>{g.reason}</td><td>{g.attribution==='product_candidate'?'Кандидат на SKU':'Нет идентификатора товара'}</td><td>{g.rows}</td><td>{rub(g.amount)}</td></tr>)}</tbody></table></div>}
- <h3>Потоварная сводка штрафов и удержаний (до 500 SKU)</h3><div className="weekly-table-wrap"><table><thead><tr><th>Артикул / nmId</th><th>Операций</th><th>Штрафы</th><th>Удержания</th></tr></thead><tbody>{products.map((p,i)=><tr key={i}><td>{p.identifier}</td><td>{p.operations}</td><td>{rub(p.penalty)}</td><td>{rub(p.deduction)}</td></tr>)}</tbody></table></div><p className="weekly-note">Наличие nmId / vendorCode — только предварительная возможность привязки. Общие расходы и окончательное распределение по товарам будут утверждаться отдельно. Эти суммы пока не влияют на юнит-экономику.</p></div>}
- </section></>}</div>;
+
+type WeeklyReportItem = {
+  report_id: number;
+  date_from: string;
+  date_to: string;
+  expected_penalty: string;
+  expected_deduction: string;
+  penalty: string;
+  deduction: string;
+  status: string;
+  loaded_rows: number;
+  last_error: string | null;
+  updated_at: string;
+};
+
+type ProductSummary = {
+  identifier: string;
+  operations: number;
+  penalty: string;
+  deduction: string;
+};
+
+type WeeklyGroup = {
+  kind: string;
+  reason: string;
+  attribution: string;
+  rows: number;
+  amount: string;
+};
+
+type DailyReportItem = {
+  report_id: number;
+  report_date: string;
+  report_type: number | string;
+  status: string;
+  loaded_rows: number;
+  last_error: string | null;
+  updated_at: string;
+  expected_retail: string;
+  expected_for_pay: string;
+  expected_bank_payment: string;
+  expected_logistics: string;
+  expected_penalty: string;
+  expected_deduction: string;
+  retail: string;
+  for_pay: string;
+  commission: string;
+  vat: string;
+  acquiring: string;
+  logistics: string;
+  storage: string;
+  acceptance: string;
+  penalty: string;
+  deduction: string;
+  additional_payment: string;
+};
+
+type DailyMetricDetail = {
+  identifier: string;
+  reason: string;
+  operation: string;
+  attribution: 'general' | 'sku_candidate';
+  rows: number;
+  amount: string;
+};
+
+type ViewMode = 'daily' | 'weekly';
+type DailyMetricKey =
+  | 'retail'
+  | 'commission'
+  | 'vat'
+  | 'acquiring'
+  | 'for_pay'
+  | 'logistics'
+  | 'storage'
+  | 'acceptance'
+  | 'penalty'
+  | 'deduction'
+  | 'additional_payment'
+  | 'bank_payment';
+
+const api = `${window.location.protocol}//${window.location.hostname}:8000`;
+const statusLabel: Record<string, string> = {
+  queued: 'В очереди',
+  loading: 'Загружается',
+  retry: 'Повтор запроса',
+  complete: 'Сверено',
+  mismatch: 'Расхождение',
+};
+const reportTypeLabel: Record<string, string> = { '1': 'Основной', '2': 'По выкупам' };
+const metricLabels: Record<DailyMetricKey, string> = {
+  retail: 'Реализация',
+  commission: 'Комиссия WB без НДС',
+  vat: 'НДС на комиссию',
+  acquiring: 'Эквайринг',
+  for_pay: 'К перечислению за товар',
+  logistics: 'Логистика',
+  storage: 'Хранение',
+  acceptance: 'Платная приёмка',
+  penalty: 'Штрафы',
+  deduction: 'Удержания',
+  additional_payment: 'Доплаты',
+  bank_payment: 'Итого к оплате (сводка WB)',
+};
+
+function toNumber(value: string | number | null | undefined): number {
+  if (typeof value === 'number') return Number.isFinite(value) ? value : 0;
+  if (typeof value !== 'string') return 0;
+  const parsed = Number(value.replace(',', '.'));
+  return Number.isFinite(parsed) ? parsed : 0;
+}
+
+function rub(value: string | number | null | undefined): string {
+  return `${toNumber(value).toLocaleString('ru-RU', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} ₽`;
+}
+
+function iso(date: Date): string {
+  return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}-${String(date.getDate()).padStart(2, '0')}`;
+}
+
+function formatDate(value: string | null | undefined): string {
+  if (!value) return '—';
+  const match = /^(\d{4})-(\d{2})-(\d{2})$/.exec(value);
+  return match ? `${match[3]}.${match[2]}.${match[1]}` : value;
+}
+
+function defaultRange(): { from: string; to: string } {
+  const end = new Date();
+  const start = new Date(end);
+  start.setDate(start.getDate() - 6);
+  return { from: iso(start), to: iso(end) };
+}
+
+function typeLabel(value: number | string): string {
+  return reportTypeLabel[String(value)] || `Тип ${value}`;
+}
+
+function resolveValue(primary: string | number | null | undefined, fallback: string | number | null | undefined): number {
+  const first = toNumber(primary);
+  if (Math.abs(first) > 0.000001) return first;
+  return toNumber(fallback);
+}
+
+function dailyBankPayment(row: DailyReportItem | null): number {
+  if (!row) return 0;
+  const expected = toNumber(row.expected_bank_payment);
+  if (Math.abs(expected) > 0.000001) return expected;
+  return toNumber(row.for_pay) - toNumber(row.logistics) - toNumber(row.storage) - toNumber(row.acceptance) - toNumber(row.penalty) - toNumber(row.deduction) + toNumber(row.additional_payment);
+}
+
+export default function WeeklyReport() {
+  const initial = useMemo(() => defaultRange(), []);
+  const [view, setView] = useState<ViewMode>('daily');
+  const [dateFrom, setDateFrom] = useState(initial.from);
+  const [dateTo, setDateTo] = useState(initial.to);
+
+  const [dailyReports, setDailyReports] = useState<DailyReportItem[]>([]);
+  const [dailyError, setDailyError] = useState('');
+  const [dailyBusy, setDailyBusy] = useState(false);
+  const [selectedDaily, setSelectedDaily] = useState<number | null>(null);
+  const [activeMetric, setActiveMetric] = useState<DailyMetricKey | null>(null);
+  const [metricDetails, setMetricDetails] = useState<DailyMetricDetail[]>([]);
+  const [metricBusy, setMetricBusy] = useState(false);
+  const [metricError, setMetricError] = useState('');
+
+  const [weeklyReports, setWeeklyReports] = useState<WeeklyReportItem[]>([]);
+  const [weeklySelected, setWeeklySelected] = useState<number | null>(null);
+  const [weeklyGroups, setWeeklyGroups] = useState<WeeklyGroup[]>([]);
+  const [weeklyProducts, setWeeklyProducts] = useState<ProductSummary[]>([]);
+  const [weeklyBusy, setWeeklyBusy] = useState(false);
+  const [weeklyError, setWeeklyError] = useState('');
+
+  const [showScrollTop, setShowScrollTop] = useState(false);
+  const dailyDetailRef = useRef<HTMLDivElement | null>(null);
+
+  const loadWeekly = useCallback(async () => {
+    try {
+      const response = await fetch(`${api}/analytics/wb-finance/reports`, { credentials: 'include' });
+      if (!response.ok) throw new Error(`HTTP ${response.status}`);
+      const data = await response.json();
+      const items = (data.items || []) as WeeklyReportItem[];
+      setWeeklyReports(items);
+      setWeeklySelected((current) => (current && items.some((item) => item.report_id === current) ? current : current ?? null));
+      setWeeklyError('');
+    } catch (error) {
+      setWeeklyError(error instanceof Error ? error.message : String(error));
+    }
+  }, []);
+
+  const loadDaily = useCallback(async () => {
+    if (!dateFrom || !dateTo) return;
+    setDailyBusy(true);
+    try {
+      const response = await fetch(`${api}/analytics/wb-finance/daily?date_from=${dateFrom}&date_to=${dateTo}`, { credentials: 'include' });
+      if (!response.ok) throw new Error(`HTTP ${response.status}`);
+      const data = await response.json();
+      const items = (data.items || []) as DailyReportItem[];
+      setDailyReports(items);
+      setSelectedDaily((current) => {
+        if (current && items.some((item) => item.report_id === current)) return current;
+        return items[0]?.report_id ?? null;
+      });
+      setDailyError('');
+    } catch (error) {
+      setDailyError(error instanceof Error ? error.message : String(error));
+    } finally {
+      setDailyBusy(false);
+    }
+  }, [dateFrom, dateTo]);
+
+  useEffect(() => {
+    void loadWeekly();
+    const timer = setInterval(() => void loadWeekly(), 60000);
+    return () => clearInterval(timer);
+  }, [loadWeekly]);
+
+  useEffect(() => {
+    void loadDaily();
+    const timer = setInterval(() => void loadDaily(), 60000);
+    return () => clearInterval(timer);
+  }, [loadDaily]);
+
+  useEffect(() => {
+    if (weeklySelected === null) {
+      setWeeklyGroups([]);
+      setWeeklyProducts([]);
+      return;
+    }
+    let alive = true;
+    setWeeklyBusy(true);
+    fetch(`${api}/analytics/wb-finance/reports/${weeklySelected}`, { credentials: 'include' })
+      .then(async (response) => {
+        if (!response.ok) throw new Error(`HTTP ${response.status}`);
+        return response.json();
+      })
+      .then((data) => {
+        if (!alive) return;
+        setWeeklyGroups(data.groups || []);
+        setWeeklyError('');
+        void fetch(`${api}/analytics/wb-finance/reports/${weeklySelected}/products`, { credentials: 'include' })
+          .then(async (response) => {
+            if (!response.ok) throw new Error(`HTTP ${response.status}`);
+            return response.json();
+          })
+          .then((productData) => {
+            if (alive) setWeeklyProducts(productData.items || []);
+          })
+          .catch(() => {
+            if (alive) setWeeklyProducts([]);
+          });
+      })
+      .catch((error) => {
+        if (alive) setWeeklyError(error instanceof Error ? error.message : String(error));
+      })
+      .finally(() => {
+        if (alive) setWeeklyBusy(false);
+      });
+    return () => {
+      alive = false;
+    };
+  }, [weeklySelected]);
+
+  useEffect(() => {
+    if (selectedDaily === null || activeMetric === null) {
+      setMetricDetails([]);
+      setMetricError('');
+      return;
+    }
+    let alive = true;
+    setMetricBusy(true);
+    fetch(`${api}/analytics/wb-finance/daily/${selectedDaily}/metric-details?metric=${activeMetric}&limit=500`, { credentials: 'include' })
+      .then(async (response) => {
+        if (!response.ok) throw new Error(`HTTP ${response.status}`);
+        return response.json();
+      })
+      .then((data) => {
+        if (!alive) return;
+        setMetricDetails(data.items || []);
+        setMetricError('');
+      })
+      .catch((error) => {
+        if (alive) {
+          setMetricDetails([]);
+          setMetricError(error instanceof Error ? error.message : String(error));
+        }
+      })
+      .finally(() => {
+        if (alive) setMetricBusy(false);
+      });
+    return () => {
+      alive = false;
+    };
+  }, [activeMetric, selectedDaily]);
+
+  useEffect(() => {
+    const onScroll = () => setShowScrollTop(window.scrollY > 220);
+    onScroll();
+    window.addEventListener('scroll', onScroll, { passive: true });
+    return () => window.removeEventListener('scroll', onScroll);
+  }, []);
+
+  const selectedDailyReport = useMemo(
+    () => dailyReports.find((item) => item.report_id === selectedDaily) ?? null,
+    [dailyReports, selectedDaily],
+  );
+  const selectedWeeklyReport = useMemo(
+    () => weeklyReports.find((item) => item.report_id === weeklySelected) ?? null,
+    [weeklyReports, weeklySelected],
+  );
+
+  const summaryCards = useMemo(() => {
+    const row = selectedDailyReport;
+    if (!row) return [] as Array<{ key: DailyMetricKey; label: string; value: number }>;
+    return [
+      { key: 'retail' as DailyMetricKey, label: metricLabels.retail, value: resolveValue(row.retail, row.expected_retail) },
+      { key: 'commission' as DailyMetricKey, label: metricLabels.commission, value: toNumber(row.commission) },
+      { key: 'vat' as DailyMetricKey, label: metricLabels.vat, value: toNumber(row.vat) },
+      { key: 'acquiring' as DailyMetricKey, label: metricLabels.acquiring, value: toNumber(row.acquiring) },
+      { key: 'for_pay' as DailyMetricKey, label: metricLabels.for_pay, value: resolveValue(row.for_pay, row.expected_for_pay) },
+      { key: 'logistics' as DailyMetricKey, label: metricLabels.logistics, value: resolveValue(row.logistics, row.expected_logistics) },
+      { key: 'storage' as DailyMetricKey, label: metricLabels.storage, value: toNumber(row.storage) },
+      { key: 'acceptance' as DailyMetricKey, label: metricLabels.acceptance, value: toNumber(row.acceptance) },
+      { key: 'penalty' as DailyMetricKey, label: metricLabels.penalty, value: resolveValue(row.penalty, row.expected_penalty) },
+      { key: 'deduction' as DailyMetricKey, label: metricLabels.deduction, value: resolveValue(row.deduction, row.expected_deduction) },
+      { key: 'additional_payment' as DailyMetricKey, label: metricLabels.additional_payment, value: toNumber(row.additional_payment) },
+      { key: 'bank_payment' as DailyMetricKey, label: metricLabels.bank_payment, value: dailyBankPayment(row) },
+    ];
+  }, [selectedDailyReport]);
+
+  const handleDailySelect = useCallback((reportId: number) => {
+    setSelectedDaily(reportId);
+    requestAnimationFrame(() => {
+      dailyDetailRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+    });
+  }, []);
+
+  return (
+    <div className="analytics-page weekly-report-page">
+      <div className="analytics-header">
+        <div>
+          <h1>Финансовые отчёты WB</h1>
+          <p>Ежедневные и еженедельные отчёты Wildberries с детализацией расходов и начислений.</p>
+        </div>
+      </div>
+
+      <div className="wb-finance-tabs" role="tablist" aria-label="Режим просмотра финансовых отчётов WB">
+        <button type="button" className={`wb-finance-tab${view === 'daily' ? ' active' : ''}`} onClick={() => setView('daily')}>Ежедневные</button>
+        <button type="button" className={`wb-finance-tab${view === 'weekly' ? ' active' : ''}`} onClick={() => setView('weekly')}>Еженедельные</button>
+      </div>
+
+      {view === 'daily' ? (
+        <section className="wb-finance-section">
+          <header className="wb-finance-section-header wb-finance-section-header--stacked">
+            <div>
+              <h2>Ежедневные отчёты WB</h2>
+            </div>
+            <div className="wb-finance-section-note">Даты финансовых отчётов, не даты заказов</div>
+          </header>
+
+          <div className="wb-finance-filters">
+            <label className="wb-finance-filter">
+              <span>С</span>
+              <DateFilter value={dateFrom} onChange={setDateFrom} ariaLabel="Дата начала периода ежедневных отчётов" />
+            </label>
+            <label className="wb-finance-filter">
+              <span>По</span>
+              <DateFilter value={dateTo} onChange={setDateTo} ariaLabel="Дата окончания периода ежедневных отчётов" />
+            </label>
+            <button type="button" className="wb-finance-refresh" onClick={() => void loadDaily()} disabled={dailyBusy}>
+              {dailyBusy ? 'Обновление…' : 'Обновить'}
+            </button>
+          </div>
+
+          {dailyError && <p role="alert" className="weekly-error">{dailyError}</p>}
+
+          <div className="weekly-table-wrap">
+            <table className="wb-finance-table">
+              <thead>
+                <tr>
+                  <th>Дата отчёта</th>
+                  <th>Тип</th>
+                  <th>К перечислению за товар</th>
+                  <th>Логистика</th>
+                  <th>Штрафы</th>
+                  <th>Удержания</th>
+                  <th>Итого к оплате</th>
+                  <th>Статус</th>
+                </tr>
+              </thead>
+              <tbody>
+                {dailyReports.map((report) => {
+                  const bankPayment = dailyBankPayment(report);
+                  return (
+                    <tr
+                      key={report.report_id}
+                      className={selectedDaily === report.report_id ? 'selected' : ''}
+                      onClick={() => handleDailySelect(report.report_id)}
+                    >
+                      <td>{formatDate(report.report_date)}</td>
+                      <td>{typeLabel(report.report_type)}</td>
+                      <td>{rub(resolveValue(report.for_pay, report.expected_for_pay))}</td>
+                      <td>{rub(resolveValue(report.logistics, report.expected_logistics))}</td>
+                      <td>{rub(resolveValue(report.penalty, report.expected_penalty))}</td>
+                      <td>{rub(resolveValue(report.deduction, report.expected_deduction))}</td>
+                      <td>{rub(bankPayment)}</td>
+                      <td>{statusLabel[report.status] || report.status}</td>
+                    </tr>
+                  );
+                })}
+                {!dailyReports.length && !dailyBusy && (
+                  <tr>
+                    <td colSpan={8} className="wb-finance-empty">За выбранный период отчёты пока не найдены.</td>
+                  </tr>
+                )}
+              </tbody>
+            </table>
+          </div>
+
+          {selectedDailyReport && (
+            <div ref={dailyDetailRef} className="wb-finance-daily-detail">
+              <h3>
+                Отчёт №{selectedDailyReport.report_id} · {typeLabel(selectedDailyReport.report_type)}
+              </h3>
+              <p className="wb-finance-detail-meta">
+                Дата отчёта: {formatDate(selectedDailyReport.report_date)} · Строк: {selectedDailyReport.loaded_rows.toLocaleString('ru-RU')} · {statusLabel[selectedDailyReport.status] || selectedDailyReport.status}
+                {selectedDailyReport.last_error ? ` · ${selectedDailyReport.last_error}` : ''}
+              </p>
+
+              <div className="wb-finance-metrics-grid">
+                {summaryCards.map((card) => (
+                  <button
+                    key={card.key}
+                    type="button"
+                    className={`wb-finance-metric-card${activeMetric === card.key ? ' active' : ''}`}
+                    onClick={() => setActiveMetric(card.key)}
+                  >
+                    <span className="wb-finance-metric-label">{card.label}</span>
+                    <strong className="wb-finance-metric-value">{rub(card.value)}</strong>
+                  </button>
+                ))}
+              </div>
+
+              <div className="wb-finance-breakdown">
+                <div className="wb-finance-breakdown-header">
+                  <div>
+                    <h4>Обоснование оплаты</h4>
+                    <p>
+                      {activeMetric ? `Показатель: ${metricLabels[activeMetric]}` : 'Нажмите на любой показатель выше, чтобы увидеть детализацию по основаниям, операциям и SKU.'}
+                    </p>
+                  </div>
+                </div>
+
+                {metricError && <p role="alert" className="weekly-error">{metricError}</p>}
+
+                {!activeMetric ? (
+                  <div className="wb-finance-breakdown-empty">Выберите показатель в карточках выше.</div>
+                ) : metricBusy ? (
+                  <div className="wb-finance-breakdown-empty">Загрузка детализации…</div>
+                ) : (
+                  <div className="weekly-table-wrap">
+                    <table className="wb-finance-table wb-finance-table--detail">
+                      <thead>
+                        <tr>
+                          <th>Основание</th>
+                          <th>Операция</th>
+                          <th>SKU / артикул</th>
+                          <th>Привязка</th>
+                          <th>Строк</th>
+                          <th>Сумма</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {metricDetails.map((item, index) => (
+                          <tr key={`${item.reason}-${item.operation}-${item.identifier || 'general'}-${index}`}>
+                            <td>{item.reason || 'Не указано'}</td>
+                            <td>{item.operation || '—'}</td>
+                            <td>{item.identifier || '—'}</td>
+                            <td>{item.attribution === 'general' ? 'Общий / без SKU' : 'Кандидат на SKU'}</td>
+                            <td>{item.rows.toLocaleString('ru-RU')}</td>
+                            <td>{rub(item.amount)}</td>
+                          </tr>
+                        ))}
+                        {!metricDetails.length && (
+                          <tr>
+                            <td colSpan={6} className="wb-finance-empty">Для выбранного показателя нет строк с ненулевой суммой.</td>
+                          </tr>
+                        )}
+                      </tbody>
+                    </table>
+                  </div>
+                )}
+              </div>
+            </div>
+          )}
+        </section>
+      ) : (
+        <section className="wb-finance-section">
+          <header className="wb-finance-section-header">
+            <h2>Еженедельные отчёты WB</h2>
+            <button type="button" className="wb-finance-refresh" onClick={() => void loadWeekly()}>
+              Обновить
+            </button>
+          </header>
+
+          {weeklyError && <p role="alert" className="weekly-error">{weeklyError}</p>}
+
+          {!weeklyReports.length ? (
+            <p>Отчёты ещё не загружены. Фоновая загрузка начнётся после запуска backend; статус обновляется автоматически.</p>
+          ) : (
+            <div className="weekly-table-wrap">
+              <table className="wb-finance-table">
+                <thead>
+                  <tr>
+                    <th>Неделя</th>
+                    <th>Отчёт</th>
+                    <th>Штрафы</th>
+                    <th>Удержания</th>
+                    <th>Статус</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {weeklyReports.map((report) => (
+                    <tr
+                      key={report.report_id}
+                      className={weeklySelected === report.report_id ? 'selected' : ''}
+                      onClick={() => setWeeklySelected(report.report_id)}
+                    >
+                      <td>{formatDate(report.date_from)} — {formatDate(report.date_to)}</td>
+                      <td>{report.report_id}</td>
+                      <td>{rub(report.penalty)} / {rub(report.expected_penalty)}</td>
+                      <td>{rub(report.deduction)} / {rub(report.expected_deduction)}</td>
+                      <td>{statusLabel[report.status] || report.status}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
+
+          {selectedWeeklyReport && (
+            <div className="weekly-detail">
+              <h3>Отчёт №{selectedWeeklyReport.report_id}</h3>
+              <p>
+                Строк: {selectedWeeklyReport.loaded_rows.toLocaleString('ru-RU')} · {statusLabel[selectedWeeklyReport.status] || selectedWeeklyReport.status}.
+                {selectedWeeklyReport.last_error ? ` ${selectedWeeklyReport.last_error}` : ''}
+              </p>
+              {selectedWeeklyReport.status !== 'complete' && (
+                <p className="weekly-error">Данные предварительные, финансовая сверка ещё не подтверждена.</p>
+              )}
+              {weeklyBusy ? (
+                <p>Загрузка детализации…</p>
+              ) : (
+                <div className="weekly-table-wrap">
+                  <table className="wb-finance-table wb-finance-table--detail">
+                    <thead>
+                      <tr>
+                        <th>Тип</th>
+                        <th>Причина</th>
+                        <th>Привязка</th>
+                        <th>Операций</th>
+                        <th>Сумма</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {weeklyGroups.map((group, index) => (
+                        <tr key={`${group.kind}-${group.reason}-${index}`}>
+                          <td>{group.kind}</td>
+                          <td>{group.reason}</td>
+                          <td>{group.attribution === 'product_candidate' ? 'Кандидат на SKU' : 'Нет идентификатора товара'}</td>
+                          <td>{group.rows}</td>
+                          <td>{rub(group.amount)}</td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              )}
+
+              <h3>Потоварная сводка штрафов и удержаний (до 500 SKU)</h3>
+              <div className="weekly-table-wrap">
+                <table className="wb-finance-table wb-finance-table--detail">
+                  <thead>
+                    <tr>
+                      <th>Артикул / nmId</th>
+                      <th>Операций</th>
+                      <th>Штрафы</th>
+                      <th>Удержания</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {weeklyProducts.map((product, index) => (
+                      <tr key={`${product.identifier}-${index}`}>
+                        <td>{product.identifier}</td>
+                        <td>{product.operations}</td>
+                        <td>{rub(product.penalty)}</td>
+                        <td>{rub(product.deduction)}</td>
+                      </tr>
+                    ))}
+                    {!weeklyProducts.length && (
+                      <tr>
+                        <td colSpan={4} className="wb-finance-empty">Детализация по товарам пока не найдена.</td>
+                      </tr>
+                    )}
+                  </tbody>
+                </table>
+              </div>
+              <p className="weekly-note">
+                Наличие nmId / vendorCode — только предварительная возможность привязки. Общие расходы и окончательное распределение по товарам будут утверждаться отдельно.
+              </p>
+            </div>
+          )}
+        </section>
+      )}
+
+      {showScrollTop && (
+        <button
+          type="button"
+          className="reviews-scroll-top"
+          onClick={() => window.scrollTo({ top: 0, behavior: 'smooth' })}
+          aria-label="Наверх"
+          title="Наверх"
+        >
+          ↑
+        </button>
+      )}
+    </div>
+  );
 }
