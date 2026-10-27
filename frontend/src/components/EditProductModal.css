@@ -1,0 +1,71 @@
+.modal-overlay {
+    position: fixed;
+    inset: 0;
+    background: rgba(0,0,0,0.35);
+    display:flex;
+    justify-content:center;
+    align-items:center;
+    z-index:100000;
+}
+
+.modal-window {
+    width:420px;
+    background:white;
+    border-radius:20px;
+    box-shadow:0 20px 50px rgba(0,0,0,0.25);
+}
+
+.modal-header {
+    display:flex;
+    justify-content:space-between;
+    padding:24px;
+}
+
+.modal-body {
+    padding:0 24px 24px;
+}
+
+.modal-body label {
+    color:#6B7280;
+}
+
+.custom-select {
+    position:relative; 
+}
+
+.select-value {
+    height:44px;
+    border:1px solid #D1D5DB;
+    border-radius:14px;
+    padding:0 14px;
+    display:flex;
+    justify-content:space-between;
+    align-items:center;
+    cursor:pointer;
+}
+
+.select-options {
+    position:absolute;
+    top:50px;
+    width:100%;
+    background:white;
+    border-radius:14px;
+    box-shadow:0 10px 30px rgba(0,0,0,0.2);
+    overflow:hidden;
+}
+
+.select-options div {
+    padding:12px;
+    cursor:pointer;
+}
+
+.select-options div:hover {
+    background:#F5F6F8;
+}
+
+.modal-footer {
+    padding:20px 24px;
+    display:flex;
+    justify-content:flex-end;
+    gap:12px;
+}

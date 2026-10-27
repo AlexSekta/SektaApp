@@ -1,0 +1,65 @@
+.unified-sales{background:var(--card-bg,#fff);border:1px solid var(--border-color,#e2e5e9);border-radius:14px;padding:22px;margin:24px 0;color:inherit}.unified-sales-heading h2{font-size:20px;margin:0 0 6px}.unified-sales-heading p,.unified-sales-footnote{font-size:12px;color:var(--text-muted,#7a808c);margin:0 0 15px}.unified-sales-controls{display:flex;align-items:center;flex-wrap:wrap;gap:12px;margin-bottom:18px}.unified-sales-controls>label{display:flex;align-items:center;gap:7px;font-size:13px}.unified-sales-controls input[type=date]{background:transparent;color:inherit;border:1px solid #bfc6d0;border-radius:7px;padding:8px}.unified-sales-segment{display:flex;border:1px solid #bfc6d0;border-radius:8px;overflow:hidden}.unified-sales-segment button{border:0;background:transparent;color:inherit;padding:9px;cursor:pointer}.unified-sales-segment button.active{background:#353a45;color:white}.unified-sales-markets{display:flex;gap:12px;flex-wrap:wrap;font-size:13px}.unified-sales-markets label{display:flex;gap:5px;align-items:center;cursor:pointer}.unified-sales-summary{display:flex;flex-wrap:wrap;gap:18px;margin:18px 0}.unified-sales-summary>div{display:flex;flex-direction:column;gap:5px;padding:12px 16px;background:var(--surface-secondary,#f5f6f8);border-radius:8px;min-width:200px}.unified-sales-summary span{font-size:12px;opacity:.75}.unified-sales-summary strong{font-size:20px}.unified-sales-warning{font-size:12px;color:#ac6812}.unified-sales-scroll{overflow-x:auto;max-width:100%;padding-bottom:8px}.unified-sales-chart{height:250px;display:flex;align-items:stretch;gap:3px;border-bottom:1px solid #aeb6bf;padding:8px 6px 0}.unified-sales-column{flex:1;min-width:19px;display:flex;flex-direction:column;align-items:stretch;justify-content:flex-end;cursor:default}.unified-sales-stack{height:208px;display:flex;flex-direction:column-reverse;justify-content:flex-start;overflow:hidden;background:rgba(100,110,120,.035)}.unified-sales-fill{width:100%;flex-shrink:0}.unified-sales-fill.wb{background:#3d3d3d}.unified-sales-fill.ozon{background:#898989}.unified-sales-fill.yandex{background:#c8c8c8}.unified-sales-column small{text-align:center;font-size:9px;white-space:nowrap;margin:7px 0;color:var(--text-muted,#747a86)}.unified-sales-footnote{margin:13px 0 0}.unified-sales-tooltip{position:fixed;z-index:10000;pointer-events:none;background:#222733;color:white;border:1px solid #555b66;box-shadow:0 6px 24px #0004;padding:12px;border-radius:9px;min-width:220px;max-width:245px;font-size:12px}.unified-sales-tooltip>strong{display:block;margin-bottom:8px}.unified-sales-tooltip>div{display:flex;flex-wrap:wrap;justify-content:space-between;gap:3px 8px;margin-top:7px}.unified-sales-tooltip small{display:block;width:100%;color:#b4b9c3}.unified-sales-tooltip-total{border-top:1px solid #555b66;padding-top:8px}
+
+.unified-sales-markets button{border:1px solid #bfc6d0;background:#f3f4f6;border-radius:7px;color:#4d535c;padding:9px 12px;cursor:pointer;font:inherit}.unified-sales-markets button.active{background:#323232;border-color:#323232;color:#8bd6a2}.unified-sales-summary>div small{font-size:10px;max-width:195px;color:#747a86}.unified-range-wrap{position:relative}.unified-range-trigger{border:1px solid #bfc6d0;border-radius:8px;background:white;color:#343434;padding:9px 12px;cursor:pointer;display:flex;gap:9px;align-items:center;white-space:nowrap}.unified-calendar{position:absolute;z-index:30;top:calc(100% + 8px);left:0;display:flex;background:#fff;border:1px solid #dedfe3;border-radius:12px;box-shadow:0 12px 40px #0002;padding:12px;min-width:365px}.unified-presets{border-right:1px solid #e5e5e5;padding-right:12px;display:flex;flex-direction:column;gap:4px}.unified-presets button{border:0;background:transparent;color:#333;text-align:left;padding:9px 12px;border-radius:7px;white-space:nowrap;cursor:pointer}.unified-presets button:hover{background:#eeeeee}.unified-calendar-main{padding-left:12px;min-width:245px}.unified-cal-header{display:flex;align-items:center;justify-content:space-between;margin-bottom:12px;text-transform:capitalize}.unified-cal-header button{border:0;background:#f2f2f2;border-radius:6px;cursor:pointer;font-size:22px;width:30px;height:30px}.unified-cal-grid{display:grid;grid-template-columns:repeat(7,1fr);gap:3px;text-align:center}.unified-cal-grid button{border:0;background:transparent;color:#292929;border-radius:6px;height:30px;cursor:pointer}.unified-cal-grid button:hover{background:#dedede}.unified-cal-grid button.edge{background:#353535;color:white}.unified-cal-grid button.between{background:#e4e4e4}.unified-cal-weekday{font-size:11px;color:#888;padding:6px 0}.unified-calendar-main p{font-size:11px;color:#888;margin:12px 0 0}@media(max-width:600px){.unified-calendar{left:auto;right:-90px;min-width:0;max-width:calc(100vw - 40px)}.unified-sales-summary>div{min-width:150px}}
+
+.unified-calendar-icon{width:16px;height:16px;flex-shrink:0}.unified-metric-info{position:relative;outline-offset:3px}.unified-metric-tooltip{position:absolute;left:0;top:calc(100% + 6px);z-index:50;min-width:220px;background:#232833;color:white;padding:12px;border-radius:9px;box-shadow:0 8px 20px #0003;font-size:12px;line-height:1.7}.unified-metric-tooltip b{display:block;margin-bottom:6px}.unified-wb-today{display:flex;align-items:center;flex-wrap:wrap;gap:10px;font-size:12px;margin:10px 0}.unified-wb-today button{border:1px solid #bbb;background:#f5f5f5;border-radius:7px;padding:8px 12px;cursor:pointer}.unified-wb-today button:disabled{opacity:.55;cursor:wait}
+
+/* Патч 34: непрерывные сегменты и линии прошлого периода */
+.unified-chart-layout{display:flex;gap:14px;align-items:stretch;min-width:0}
+.unified-chart-layout>.unified-sales-scroll{flex:1;min-width:0}
+.unified-sales-chart{position:relative;display:block;padding:8px 6px 0;height:250px;overflow:hidden}
+.unified-sales-areas{position:absolute;left:6px;right:6px;top:8px;width:calc(100% - 12px);height:208px;pointer-events:none}
+.unified-area.wb{fill:#3d3d3d}.unified-area.ozon{fill:#898989}.unified-area.yandex{fill:#c8c8c8}
+.unified-previous-line{fill:none;stroke-width:2.3;vector-effect:non-scaling-stroke;stroke-dasharray:6 4;stroke-linejoin:round;stroke-linecap:round}
+.unified-previous-line.wb{stroke:#111}.unified-previous-line.ozon{stroke:#686868}.unified-previous-line.yandex{stroke:#a5a5a5}
+.unified-sales-bars{position:relative;display:flex;height:100%;gap:0}
+.unified-sales-column{min-width:19px;justify-content:flex-end;border-right:1px solid rgba(255,255,255,.44);cursor:default}
+.unified-sales-column small{height:24px;display:flex;align-items:center;justify-content:center;margin:0}
+.unified-prior-legend{width:164px;flex-shrink:0;display:flex;flex-direction:column;gap:12px;border-left:1px solid var(--border-color,#e2e5e9);padding:14px 0 0 12px;font-size:12px}
+.unified-prior-legend>b{font-size:12px;font-weight:600}.unified-prior-legend>small{color:var(--text-muted,#747a86);font-size:10px;line-height:1.5}
+.unified-prior-legend-item{display:flex;gap:8px;align-items:center}.unified-legend-stroke{width:23px;border-top:2px dashed #333;flex-shrink:0}.unified-legend-stroke.ozon{border-color:#686868}.unified-legend-stroke.yandex{border-color:#a5a5a5}
+.unified-sales-tooltip{background:#fff;color:#2f343c;border:1px solid #d7dbe0;box-shadow:0 8px 22px #0002}
+.unified-sales-tooltip small{color:#737a83}.unified-sales-tooltip-total{border-color:#e2e5e9}
+.unified-tooltip-market{display:inline-flex;align-items:center;gap:7px}
+.unified-color-square{display:inline-block;width:10px;height:10px;border-radius:2px;background:#3d3d3d;flex-shrink:0}.unified-color-square.ozon{background:#898989}.unified-color-square.yandex{background:#c8c8c8;border:1px solid #aaa}
+@media(max-width:800px){.unified-chart-layout{flex-direction:column}.unified-prior-legend{width:auto;flex-direction:row;flex-wrap:wrap;border-left:0;border-top:1px solid #ddd;padding:10px 0}.unified-prior-legend>small{width:100%}}
+
+
+/* Патч 35: линейный график вместо столбцов */
+.unified-chart-layout{display:flex;gap:14px;align-items:stretch;min-width:0}
+.unified-chart-layout>.unified-sales-scroll{flex:1;min-width:0}
+.unified-sales-chart{position:relative;display:block;padding:8px 6px 0;height:250px;overflow:hidden}
+.unified-sales-lines{position:absolute;left:6px;right:6px;top:8px;width:calc(100% - 12px);height:208px;pointer-events:none;overflow:visible}
+.unified-current-line,.unified-previous-line{fill:none;stroke-width:2.6;vector-effect:non-scaling-stroke;stroke-linejoin:round;stroke-linecap:round}
+.unified-current-line.wb,.unified-current-point.wb{stroke:#3d3d3d;color:#3d3d3d;fill:#3d3d3d}
+.unified-current-line.ozon,.unified-current-point.ozon{stroke:#808080;color:#808080;fill:#808080}
+.unified-current-line.yandex,.unified-current-point.yandex{stroke:#b8b8b8;color:#b8b8b8;fill:#b8b8b8}
+.unified-current-point{stroke:#fff;stroke-width:1.4}
+.unified-previous-line{stroke-dasharray:6 5;opacity:.9}
+.unified-previous-line.wb{stroke:#3d3d3d}.unified-previous-line.ozon{stroke:#808080}.unified-previous-line.yandex{stroke:#b8b8b8}
+.unified-sales-bars{position:relative;display:flex;height:100%;gap:0}
+.unified-sales-column{min-width:19px;justify-content:flex-end;border-right:1px solid rgba(0,0,0,.04);cursor:default}
+.unified-sales-column small{height:24px;display:flex;align-items:center;justify-content:center;margin:0}
+.unified-prior-legend{width:184px;flex-shrink:0;display:flex;flex-direction:column;gap:12px;border-left:1px solid var(--border-color,#e2e5e9);padding:14px 0 0 12px;font-size:12px}
+.unified-prior-legend>b{font-size:12px;font-weight:600}.unified-prior-legend>small{color:var(--text-muted,#747a86);font-size:10px;line-height:1.5}
+.unified-prior-legend-item{display:flex;gap:8px;align-items:center}.unified-legend-line{position:relative;display:inline-block;width:26px;height:10px;flex-shrink:0}.unified-legend-line::before,.unified-legend-line::after{content:"";position:absolute;left:0;right:0;border-top:2px solid #333;top:2px}.unified-legend-line::after{top:7px;border-top-style:dashed;opacity:.85}.unified-legend-line.wb::before,.unified-legend-line.wb::after{border-color:#3d3d3d}.unified-legend-line.ozon::before,.unified-legend-line.ozon::after{border-color:#808080}.unified-legend-line.yandex::before,.unified-legend-line.yandex::after{border-color:#b8b8b8}
+.unified-sales-tooltip{background:#fff;color:#2f343c;border:1px solid #d7dbe0;box-shadow:0 8px 22px #0002}
+.unified-sales-tooltip small{color:#737a83}.unified-sales-tooltip-total{border-color:#e2e5e9}
+.unified-tooltip-market{display:inline-flex;align-items:center;gap:7px}
+.unified-color-square{display:inline-block;width:10px;height:10px;border-radius:2px;background:#3d3d3d;flex-shrink:0}.unified-color-square.ozon{background:#808080}.unified-color-square.yandex{background:#b8b8b8;border:1px solid #a8a8a8}
+@media(max-width:800px){.unified-chart-layout{flex-direction:column}.unified-prior-legend{width:auto;flex-direction:row;flex-wrap:wrap;border-left:0;border-top:1px solid #ddd;padding:10px 0}.unified-prior-legend>small{width:100%}}
+
+/* Патч 36: прозрачный фон, компактные интерактивные точки */
+.unified-current-line.wb,.unified-current-line.ozon,.unified-current-line.yandex{fill:none}
+.unified-current-point{transition:r 120ms ease;stroke-width:1;vector-effect:non-scaling-stroke}
+.unified-sales-chart,.unified-sales-bars,.unified-sales-column{background:transparent}
+
+/* Патч 37 — общий выбор и отдельное сравнение */
+.unified-sales-markets .unified-previous-toggle{margin-left:8px;}
+.unified-sales-markets button.active{background:#323232;border-color:#323232;color:#8bd6a2;}
+
+/* Патч 38: одна суммарная линия в режиме «Все» */
+.unified-current-line.all{stroke:#30343b;fill:none}
+.unified-current-point.all{fill:#30343b;stroke:#fff}
+.unified-previous-line.all{stroke:#30343b;fill:none}
+.unified-legend-line.all::before,.unified-legend-line.all::after{border-color:#30343b}

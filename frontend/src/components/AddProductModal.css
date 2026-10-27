@@ -1,0 +1,259 @@
+.modal-overlay {
+
+    position: fixed;
+
+    inset: 0;
+
+    background: rgba(0,0,0,0.35);
+
+    display: flex;
+
+    justify-content: center;
+
+    align-items: center;
+
+    z-index: 100000;
+
+}
+
+
+
+.modal-window {
+
+    width: 420px;
+
+    background: white;
+
+    border-radius: 20px;
+
+    box-shadow: 0 20px 50px rgba(0,0,0,0.25);
+
+    font-family: "Comfortaa", sans-serif;
+
+}
+
+
+
+.modal-header {
+
+    display: flex;
+
+    justify-content: space-between;
+
+    align-items: center;
+
+    padding: 24px;
+
+}
+
+
+
+.modal-header h2 {
+
+    margin:0;
+
+}
+
+
+
+.close-button {
+
+    background:transparent;
+
+    border:none;
+
+    color:#333;
+
+    font-size:24px;
+
+    cursor:pointer;
+
+}
+
+
+
+.modal-body {
+
+    display:flex;
+
+    flex-direction:column;
+
+    gap:10px;
+
+    padding:0 24px 24px;
+
+}
+
+
+
+.modal-body label {
+
+    color:#6B7280;
+
+    font-size:13px;
+
+}
+
+
+
+.modal-body input {
+
+    height:44px;
+
+    border-radius:14px;
+
+    border:1px solid #D1D5DB;
+
+    padding:0 14px;
+
+    font-family:"Comfortaa";
+
+}
+
+
+
+.custom-select {
+
+    position:relative;
+
+}
+
+
+
+.select-value,
+.select-placeholder {
+
+    height:44px;
+
+    border:1px solid #D1D5DB;
+
+    border-radius:14px;
+
+    padding:0 14px;
+
+    display:flex;
+
+    align-items:center;
+
+    justify-content:space-between;
+
+    cursor:pointer;
+
+    font-family:"Comfortaa";
+
+}
+
+
+
+.select-placeholder {
+
+    color:#6B7280;
+
+}
+
+
+
+.select-options {
+
+    position:absolute;
+
+    top:50px;
+
+    left:0;
+
+    width:100%;
+
+    background:white;
+
+    border-radius:14px;
+
+    box-shadow:0 10px 30px rgba(0,0,0,0.2);
+
+    overflow:hidden;
+
+    z-index:10;
+
+}
+
+
+
+.select-options div {
+
+    padding:12px 14px;
+
+    cursor:pointer;
+
+}
+
+
+
+.select-options div:hover {
+
+    background:#F5F6F8;
+
+}
+
+
+
+.modal-footer {
+
+    display:flex;
+
+    justify-content:flex-end;
+
+    gap:12px;
+
+    padding:20px 24px;
+
+    border-top:1px solid #E5E7EB;
+
+}
+
+
+
+.cancel-button,
+.save-button {
+
+    height:42px;
+
+    padding:0 22px;
+
+    border-radius:12px;
+
+    border:none;
+
+    font-family:"Comfortaa";
+
+    cursor:pointer;
+
+}
+
+
+
+.cancel-button {
+
+    background:#F5F6F8;
+
+    color:#333;
+
+}
+
+
+
+.save-button {
+
+    background:#333;
+
+    color:white;
+
+}
+
+
+
+.modal-error {
+
+    color:#B91C1C;
+
+    font-size:13px;
+
+}

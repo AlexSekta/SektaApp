@@ -1,0 +1,401 @@
+.app {
+    display: flex;
+    min-height: 100vh;
+    background: #F5F6F8;
+    font-family: "Comfortaa", sans-serif;
+}
+
+.sidebar {
+    width: 260px;
+    flex: 0 0 260px;
+    box-sizing: border-box;
+    background: #333333;
+    color: white;
+    padding: 30px 20px;
+}
+
+.logo {
+    font-size: 24px;
+    font-weight: 700;
+    margin-bottom: 40px;
+    margin-left: 15px;
+}
+
+nav {
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+}
+
+nav a {
+    color: #E5E7EB;
+    text-decoration: none;
+    padding: 14px 16px;
+    border-radius: 12px;
+    transition: 0.2s;
+}
+
+nav a:hover {
+    background: #555555;
+    color: white;
+}
+
+
+/* =====================================================
+   ОТЗЫВЫ — РАСКРЫВАЕМОЕ ПОДМЕНЮ
+   ===================================================== */
+
+.nav-review-group {
+    display: flex;
+    flex-direction: column;
+}
+
+.nav-review-group > .reviews-main-link {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 10px;
+    box-sizing: border-box;
+}
+
+.nav-review-group.active > .reviews-main-link {
+    background: #555555;
+    color: white;
+}
+
+.reviews-main-link {
+    width: 100%;
+}
+
+.reviews-chevron {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 18px;
+    height: 18px;
+    flex: 0 0 18px;
+    font-size: 20px;
+    line-height: 1;
+    transform: rotate(0deg);
+    transition: transform 0.2s ease;
+}
+
+.reviews-chevron.open {
+    transform: rotate(90deg);
+}
+
+.reviews-submenu {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+    margin-top: 2px;
+    margin-left: 16px;
+    padding-left: 16px;
+    border-left: 1px solid #5A5A5A;
+}
+
+.reviews-sub-link {
+
+    display: flex;
+
+    align-items: center;
+
+    justify-content: space-between;
+
+    gap: 10px;
+
+    padding: 8px 12px;
+
+    border-radius: 8px;
+
+    color: #BFC3C9;
+
+    font-size: 13px;
+
+}
+
+.reviews-sub-link:hover {
+    background: #444444;
+    color: #FFFFFF;
+}
+
+.reviews-sub-link.active {
+    background: #444444;
+    color: #FFFFFF;
+    font-weight: 700;
+}
+
+.content {
+    flex: 1;
+    min-width: 0;
+}
+
+
+/* =====================================================
+   НОВЫЕ ОТЗЫВЫ — СЧЁТЧИК
+   ===================================================== */
+
+.reviews-count-badge {
+
+    display: inline-flex;
+
+    align-items: center;
+
+    justify-content: center;
+
+    min-width: 22px;
+
+    height: 22px;
+
+    padding: 0 6px;
+
+    box-sizing: border-box;
+
+    border-radius: 999px;
+
+    background: #FFFFFF;
+
+    color: #333333;
+
+    font-size: 11px;
+
+    font-weight: 700;
+
+    line-height: 1;
+
+}
+
+
+.customer-communication {
+    position: relative;
+}
+
+.communication-switch {
+    position: absolute;
+    top: 40px;
+    left: 40px;
+    z-index: 5;
+    display: inline-flex;
+    gap: 4px;
+    padding: 4px;
+    border: 1px solid #E5E7EB;
+    border-radius: 10px;
+    background: #FFFFFF;
+}
+
+.communication-switch-button {
+    height: 34px;
+    padding: 0 14px;
+    border: none;
+    border-radius: 7px;
+    background: transparent;
+    color: #6B7280;
+    font-family: inherit;
+    font-size: 12px;
+    cursor: pointer;
+}
+
+.communication-switch-button.active {
+    background: #333333;
+    color: #FFFFFF;
+}
+
+.customer-communication > .reviews-page { padding-top: 96px; }
+
+/* SETTINGS */
+.sidebar { display:flex; flex-direction:column; }
+.sidebar nav { flex:0 0 auto; }
+.settings-nav-link {
+    margin-top:auto;
+    display:flex;
+    align-items:center;
+    gap:10px;
+    width:100%;
+    box-sizing:border-box;
+    padding:14px 16px;
+    border-radius:12px;
+    color:#E5E7EB;
+    text-decoration:none;
+    transition:background .2s ease,color .2s ease;
+}
+.settings-nav-link:hover,
+.settings-nav-link.active { background:#555555; color:#FFFFFF; }
+.settings-gear {
+    width:20px;
+    height:20px;
+    display:inline-flex;
+    align-items:center;
+    justify-content:center;
+    flex:0 0 20px;
+}
+.settings-gear svg { width:19px; height:19px; display:block; fill:currentColor; }
+
+
+/* =====================================================
+   АНАЛИТИКА — РАСКРЫВАЕМОЕ ПОДМЕНЮ
+   ===================================================== */
+
+.nav-analytics-group {
+    display: flex;
+    flex-direction: column;
+}
+
+.nav-analytics-group > .analytics-main-link {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 10px;
+    box-sizing: border-box;
+}
+
+.nav-analytics-group.active > .analytics-main-link {
+    background: #555555;
+    color: white;
+}
+
+.analytics-main-link {
+    width: 100%;
+}
+
+.analytics-chevron {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 18px;
+    height: 18px;
+    flex: 0 0 18px;
+    font-size: 20px;
+    line-height: 1;
+    transform: rotate(0deg);
+    transition: transform 0.2s ease;
+}
+
+.analytics-chevron.open {
+    transform: rotate(90deg);
+}
+
+.analytics-submenu {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+    margin-top: 2px;
+    margin-left: 16px;
+    padding-left: 16px;
+    border-left: 1px solid #5A5A5A;
+}
+
+.analytics-sub-link {
+    display: flex;
+    align-items: center;
+    padding: 8px 12px;
+    border-radius: 8px;
+    color: #BFC3C9;
+    font-size: 13px;
+    text-decoration: none;
+}
+
+.analytics-sub-link:hover {
+    background: #444444;
+    color: #FFFFFF;
+}
+
+.analytics-sub-link.active {
+    background: #444444;
+    color: #FFFFFF;
+    font-weight: 700;
+}
+
+
+/* =====================================================
+   ФИКСИРОВАННОЕ ЛЕВОЕ МЕНЮ
+   Правая часть страницы прокручивается отдельно.
+   ===================================================== */
+
+.app {
+    display: block !important;
+    min-height: 100vh;
+    width: 100%;
+}
+
+.sidebar {
+    position: fixed !important;
+
+    top: 0;
+    left: 0;
+    bottom: 0;
+
+    width: 260px !important;
+    height: 100vh;
+
+    box-sizing: border-box;
+
+    overflow-y: auto;
+    overflow-x: hidden;
+
+    z-index: 1000;
+
+    display: flex !important;
+    flex-direction: column !important;
+
+    scrollbar-width: none;
+    -ms-overflow-style: none;
+}
+
+.sidebar::-webkit-scrollbar {
+    width: 0;
+    height: 0;
+}
+
+.content {
+    margin-left: 260px !important;
+    width: calc(100% - 260px) !important;
+    min-width: 0;
+    box-sizing: border-box;
+}
+
+.sidebar .settings-nav-link {
+    margin-top: auto !important;
+    flex: 0 0 auto;
+}
+
+@media (max-width: 800px) {
+    .sidebar {
+        width: 220px !important;
+    }
+
+    .content {
+        margin-left: 220px !important;
+        width: calc(100% - 220px) !important;
+    }
+}
+
+
+.auth-user-block{margin:0 12px 10px;padding:12px;border:1px solid #4a4a4a;border-radius:11px;background:#303030;color:#fff}.auth-user-name{font-size:11px;font-weight:700;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}.auth-user-email{margin-top:4px;color:#aeb3ba;font-size:9px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}.auth-logout-button{margin-top:9px;width:100%;height:30px;border:1px solid #5a5a5a;border-radius:8px;background:transparent;color:#d5d8dc;font:600 10px "Comfortaa",sans-serif;cursor:pointer}.auth-logout-button:hover{background:#444;color:#fff}
+
+.auth-user-profile-link{display:block;color:inherit;text-decoration:none;border-radius:8px;padding:4px}.auth-user-profile-link:hover{background:#444}.auth-user-edit{display:block;color:#cbd1d8;font-size:10px;margin-top:9px}.auth-user-profile-link:focus-visible{outline:2px solid #ddd;outline-offset:2px}
+
+/* Профиль закреплён внизу боковой панели, без внешних отступов. */
+.sidebar nav { flex: 1 0 auto; }
+.sidebar .auth-user-block { margin: 0; flex: 0 0 auto; }
+
+/* Section headings toggle their submenu without routing. */
+.sidebar .sidebar-section-toggle {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    width: 100%;
+    box-sizing: border-box;
+    padding: 14px 16px;
+    border: 0;
+    border-radius: 12px;
+    background: transparent;
+    color: #E5E7EB;
+    font: inherit;
+    text-align: left;
+    cursor: pointer;
+    transition: background .2s ease, color .2s ease;
+}
+.sidebar .sidebar-section-toggle:hover {
+    background: #555555;
+    color: white;
+}

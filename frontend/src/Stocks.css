@@ -1,0 +1,336 @@
+.container {
+    min-height: 100vh;
+    padding: 40px;
+    background: #F5F6F8;
+    font-family: "Comfortaa", sans-serif;
+    color: #2B2B2B;
+}
+
+h1 {
+    font-size: 32px;
+    font-weight: 700;
+    margin-bottom: 30px;
+}
+
+
+/* =========================================================
+   TOOLBAR
+   ========================================================= */
+
+.toolbar {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    min-height: 84px;
+    padding: 20px;
+    background: #FFFFFF;
+    border-radius: 18px;
+    box-shadow: 0 8px 25px rgba(0, 0, 0, 0.05);
+    margin-bottom: 20px;
+}
+
+.toolbar div {
+    color: #6B7280;
+    font-size: 14px;
+}
+
+
+/* =========================================================
+   ИНФОРМАЦИЯ ОБ ОБНОВЛЕНИИ
+   ========================================================= */
+
+.update-info {
+    display: flex;
+    align-items: center;
+    white-space: nowrap;
+}
+
+.update-info strong {
+    margin-left: 12px;
+    color: #2B2B2B;
+}
+
+
+/* =========================================================
+   КНОПКИ TOOLBAR
+   ========================================================= */
+
+.actions {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    flex-shrink: 0;
+}
+
+.actions button {
+    height: 44px;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    gap: 8px;
+    padding: 0 22px;
+    margin: 0;
+    border: none;
+    border-radius: 14px;
+    background: #333333;
+    color: #FFFFFF;
+    font-family: "Comfortaa", sans-serif;
+    font-size: 14px;
+    white-space: nowrap;
+    cursor: pointer;
+    transition:
+        background 0.2s ease,
+        opacity 0.2s ease;
+}
+
+.actions button:first-child {
+    width: 190px;
+}
+
+.actions button:last-child {
+    width: 160px;
+}
+
+.actions button:hover:not(:disabled) {
+    background: #555555;
+}
+
+.actions button:disabled {
+    opacity: 0.7;
+    cursor: wait;
+}
+
+
+/* =========================================================
+   ФИЛЬТРЫ
+   ========================================================= */
+
+.filters {
+    padding: 20px;
+    background: #FFFFFF;
+    border-radius: 18px;
+    box-shadow: 0 8px 25px rgba(0, 0, 0, 0.05);
+    margin-bottom: 20px;
+}
+
+.filters input {
+    width: 300px;
+    height: 44px;
+    padding: 0 16px;
+    border: 1px solid #D1D5DB;
+    border-radius: 14px;
+    background: #FFFFFF;
+    color: #2B2B2B;
+    font-family: "Comfortaa", sans-serif;
+    font-size: 14px;
+}
+
+.filters input:focus {
+    outline: none;
+    border-color: #333333;
+}
+
+
+/* =========================================================
+   КАРТОЧКА ТАБЛИЦЫ
+   ========================================================= */
+
+.table-card {
+    position: relative;
+    width: 100%;
+    background: #FFFFFF;
+    border-radius: 18px;
+    overflow: hidden;
+    box-shadow: 0 8px 25px rgba(0, 0, 0, 0.05);
+}
+
+
+/* =========================================================
+   ОБЩИЕ ПАРАМЕТРЫ ТАБЛИЦ
+   ========================================================= */
+
+.stocks-header-table,
+.stocks-body-table {
+    width: 100%;
+    table-layout: fixed;
+    border-collapse: separate;
+    border-spacing: 0;
+    background: #FFFFFF;
+}
+
+
+/* =========================================================
+   ШИРИНА КОЛОНОК
+   ========================================================= */
+
+.stocks-header-table th:nth-child(1),
+.stocks-body-table td:nth-child(1) {
+    width: 18%;
+}
+
+.stocks-header-table th:nth-child(2),
+.stocks-body-table td:nth-child(2) {
+    width: 14%;
+}
+
+.stocks-header-table th:nth-child(3),
+.stocks-body-table td:nth-child(3) {
+    width: 26%;
+}
+
+.stocks-header-table th:nth-child(4),
+.stocks-body-table td:nth-child(4) {
+    width: 12%;
+}
+
+.stocks-header-table th:nth-child(5),
+.stocks-body-table td:nth-child(5) {
+    width: 18%;
+}
+
+.stocks-header-table th:nth-child(6),
+.stocks-body-table td:nth-child(6) {
+    width: 12%;
+}
+
+
+/* =========================================================
+   НЕПОДВИЖНАЯ ШАПКА
+   Скругление сохраняем
+   ========================================================= */
+
+.stocks-header-table {
+    background: #333333;
+    color: #FFFFFF;
+    border-radius: 18px 18px 0 0;
+    overflow: hidden;
+}
+
+.stocks-header-table thead {
+    background: #333333;
+    color: #FFFFFF;
+}
+
+.stocks-header-table th {
+    padding: 16px;
+    background: #333333;
+    color: #FFFFFF;
+    text-align: left;
+    font-size: 14px;
+    font-weight: 600;
+}
+
+.stocks-header-table th:first-child {
+    border-top-left-radius: 18px;
+}
+
+.stocks-header-table th:last-child {
+    border-top-right-radius: 18px;
+}
+
+
+/* =========================================================
+   ПРОКРУЧИВАЕМЫЙ СПИСОК
+   ========================================================= */
+
+.stocks-table-scroll {
+    max-height: 520px;
+    overflow-y: auto;
+    overflow-x: hidden;
+    scrollbar-width: none;
+    -ms-overflow-style: none;
+}
+
+.stocks-table-scroll::-webkit-scrollbar {
+    width: 0;
+    height: 0;
+    display: none;
+}
+
+
+/* =========================================================
+   СТРОКИ
+   ========================================================= */
+
+.stocks-body-table td {
+    padding: 16px;
+    border-bottom: 1px solid #E5E7EB;
+    background: #FFFFFF;
+    font-size: 14px;
+}
+
+.stocks-body-table tbody tr:last-child td {
+    border-bottom: none;
+}
+
+.stocks-body-table tbody tr:hover td {
+    background: #F9FAFB;
+}
+
+
+/* =========================================================
+   КНОПКА НАВЕРХ
+   ========================================================= */
+
+.stocks-scroll-top {
+    position: absolute;
+
+    right: 18px;
+    bottom: 18px;
+
+    z-index: 50;
+
+    width: 52px;
+    height: 52px;
+
+    display: flex;
+    align-items: center;
+    justify-content: center;
+
+    padding: 0;
+    margin: 0;
+
+    border: none;
+    border-radius: 12px;
+
+    background: #2B2B2B;
+    color: #FFFFFF;
+
+    font-family: "Comfortaa", sans-serif;
+    font-size: 27px;
+    font-weight: 400;
+    line-height: 1;
+
+    cursor: pointer;
+
+    box-shadow: 0 8px 24px rgba(0, 0, 0, 0.18);
+
+    transition:
+        background 0.15s ease,
+        transform 0.15s ease,
+        box-shadow 0.15s ease,
+        opacity 0.15s ease;
+
+    animation: stocks-scroll-top-in 0.15s ease-out;
+}
+
+.stocks-scroll-top:hover {
+    background: #111111;
+    box-shadow: 0 10px 28px rgba(0, 0, 0, 0.24);
+}
+
+.stocks-scroll-top:active {
+    transform: scale(0.96);
+}
+
+@keyframes stocks-scroll-top-in {
+    from {
+        opacity: 0;
+        transform: translateY(6px);
+    }
+
+    to {
+        opacity: 1;
+        transform: translateY(0);
+    }
+}

@@ -1,0 +1,36 @@
+.loader {
+    display: inline-block;
+
+    box-sizing: border-box;
+
+    border-style: solid;
+    border-color: #D1D5DB;
+    border-top-color: #374151;
+
+    border-radius: 50%;
+
+    animation: loader-spin 0.7s linear infinite;
+}
+
+
+.loader-small {
+    width: 15px;
+    height: 15px;
+
+    border-width: 2px;
+}
+
+
+.loader-medium {
+    width: 24px;
+    height: 24px;
+
+    border-width: 3px;
+}
+
+
+@keyframes loader-spin {
+    to {
+        transform: rotate(360deg);
+    }
+}

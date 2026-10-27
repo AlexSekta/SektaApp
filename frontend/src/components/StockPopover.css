@@ -1,0 +1,377 @@
+.stock-cell {
+    display: inline-flex;
+    align-items: center;
+
+    min-height: 28px;
+}
+
+
+/*
+ * Основной остаток и рекомендация находятся
+ * внутри одного StockPopover.
+ *
+ * Поэтому расстояние задаём здесь, а не
+ * через gap у .stock-cell.
+ */
+.stock-popover-trigger {
+    position: relative;
+
+    display: inline-flex;
+    align-items: center;
+
+    min-width: 24px;
+
+    cursor: default;
+}
+
+
+.stock-popover-value {
+    display: inline-flex;
+    align-items: center;
+
+    /*
+     * Минимум 8 px между текущим
+     * и рекомендованным значением.
+     */
+    gap: 8px;
+
+    min-height: 28px;
+
+    font-size: 14px;
+}
+
+
+.stock-popover {
+    position: fixed;
+
+    z-index: 100000;
+
+    width: 220px;
+
+    box-sizing: border-box;
+
+    padding: 12px 14px;
+
+    background: #FFFFFF;
+
+    border: 1px solid #E5E7EB;
+
+    border-radius: 12px;
+
+    box-shadow:
+        0 12px 35px
+        rgba(0, 0, 0, 0.18);
+
+    font-family: "Comfortaa", sans-serif;
+
+    font-size: 13px;
+
+    line-height: 1.45;
+
+    color: #2B2B2B;
+
+    animation:
+        stock-popover-in
+        0.12s
+        ease-out;
+}
+
+
+.stock-popover-above {
+    transform: translateY(-100%);
+}
+
+
+.stock-popover-title {
+    margin-bottom: 8px;
+
+    font-size: 14px;
+
+    font-weight: 700;
+}
+
+
+.stock-popover-row {
+    display: flex;
+    align-items: center;
+
+    gap: 6px;
+
+    min-height: 30px;
+}
+
+
+.stock-popover-row > span,
+.stock-popover-fbs > span {
+    flex: 0 0 42px;
+}
+
+
+.stock-popover-row strong {
+    font-weight: 600;
+}
+
+
+.stock-popover-fbs {
+    display: flex;
+    align-items: center;
+
+    gap: 6px;
+
+    min-height: 38px;
+
+    margin-top: 2px;
+}
+
+
+.stock-popover-fbs .stock-edit {
+    display: flex;
+    align-items: center;
+
+    flex: 0 0 110px;
+
+    width: 110px;
+
+    min-width: 110px;
+
+    gap: 6px;
+}
+
+
+.stock-popover-fbs .stock-edit input {
+    flex: 0 0 72px;
+
+    width: 72px;
+
+    height: 32px;
+
+    box-sizing: border-box;
+
+    padding: 0 8px;
+
+    font-size: 13px;
+}
+
+
+.stock-popover-fbs .save-stock {
+    flex: 0 0 32px;
+
+    width: 32px;
+
+    height: 32px;
+
+    box-sizing: border-box;
+}
+
+
+.stock-popover-recommendation {
+    display: flex;
+    align-items: center;
+
+    justify-content: space-between;
+
+    gap: 12px;
+
+    margin-top: 14px;
+
+    padding-top: 10px;
+
+    border-top: 1px solid #E5E7EB;
+
+    font-size: 13px;
+}
+
+
+/*
+ * Рекомендация в ОСНОВНОЙ ТАБЛИЦЕ.
+ *
+ * Фиксированный размер исключает скачки
+ * при пульсации и разном количестве цифр.
+ */
+.stock-cell .stock-recommendation {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+
+    flex: 0 0 42px;
+
+    width: 42px;
+    min-width: 42px;
+
+    height: 26px;
+    min-height: 26px;
+
+    box-sizing: border-box;
+
+    margin: 0;
+    padding: 0 4px;
+
+    border-radius: 6px;
+
+    font-size: 14px;
+    font-weight: 700;
+
+    line-height: 1;
+
+    animation-duration: 2.4s;
+    animation-iteration-count: infinite;
+    animation-timing-function: ease-in-out;
+}
+
+
+/*
+ * Рекомендация ВНУТРИ POPUP.
+ *
+ * Отдельно переопределяем размер, потому что
+ * раньше общий квадрат 34px обрезал значения
+ * вроде 516 / 1290.
+ */
+.stock-popover-recommendation .stock-recommendation {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+
+    flex: 0 0 54px;
+
+    width: 54px;
+    min-width: 54px;
+
+    height: 30px;
+    min-height: 30px;
+
+    box-sizing: border-box;
+
+    margin: 0;
+    padding: 0 8px;
+
+    border-radius: 7px;
+
+    font-size: 13px;
+    font-weight: 700;
+
+    line-height: 1;
+
+    animation-duration: 2.4s;
+    animation-iteration-count: infinite;
+    animation-timing-function: ease-in-out;
+}
+
+
+.stock-recommendation-green {
+    color: #166534;
+
+    background: #DCFCE7;
+
+    animation-name:
+        recommendation-pulse-green;
+}
+
+
+.stock-recommendation-orange {
+    color: #9A3412;
+
+    background: #FFEDD5;
+
+    animation-name:
+        recommendation-pulse-orange;
+}
+
+
+.stock-recommendation-red {
+    color: #991B1B;
+
+    background: #FEE2E2;
+
+    animation-name:
+        recommendation-pulse-red;
+}
+
+
+.stock-1c-low {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+
+    width: 42px;
+    min-width: 42px;
+
+    height: 26px;
+    min-height: 26px;
+
+    box-sizing: border-box;
+
+    padding: 0 4px;
+
+    color: #991B1B;
+
+    background: #FEE2E2;
+
+    border-radius: 6px;
+
+    font-weight: 700;
+    line-height: 1;
+
+    animation:
+        recommendation-pulse-red
+        2.4s
+        ease-in-out
+        infinite;
+}
+
+
+@keyframes recommendation-pulse-green {
+
+    0%, 100% {
+        opacity: 1;
+        transform: scale(1);
+    }
+
+    50% {
+        opacity: 0.45;
+        transform: scale(1.04);
+    }
+
+}
+
+
+@keyframes recommendation-pulse-orange {
+
+    0%, 100% {
+        opacity: 1;
+        transform: scale(1);
+    }
+
+    50% {
+        opacity: 0.45;
+        transform: scale(1.04);
+    }
+
+}
+
+
+@keyframes recommendation-pulse-red {
+
+    0%, 100% {
+        opacity: 1;
+        transform: scale(1);
+    }
+
+    50% {
+        opacity: 0.35;
+        transform: scale(1.05);
+    }
+
+}
+
+
+@keyframes stock-popover-in {
+
+    from {
+        opacity: 0;
+    }
+
+    to {
+        opacity: 1;
+    }
+
+}

@@ -1,0 +1,88 @@
+@import url('https://fonts.googleapis.com/css2?family=Comfortaa:wght@400;500;600;700&display=swap');
+
+
+* {
+
+    box-sizing: border-box;
+
+}
+
+
+html,
+body,
+#root {
+
+    margin: 0;
+
+    padding: 0;
+
+    width: 100%;
+
+    min-height: 100vh;
+
+}
+
+
+body {
+
+    font-family: "Comfortaa", sans-serif;
+
+    background: #F5F6F8;
+
+    color: #2B2B2B;
+
+}
+
+
+button,
+input,
+select,
+textarea,
+table,
+th,
+td,
+h1,
+h2,
+h3,
+p {
+
+    font-family: "Comfortaa", sans-serif;
+
+}
+
+.save-button,
+.delete-button {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    gap: 8px;
+}
+
+.save-button:disabled,
+.delete-button:disabled,
+.cancel-button:disabled,
+.close-button:disabled {
+    cursor: wait;
+}
+
+.save-button:disabled,
+.delete-button:disabled {
+    opacity: 0.8;
+}
+
+/* =========================================================
+   СКРЫВАЕМ ПОЛЗУНОК СТРАНИЦЫ, НО ОСТАВЛЯЕМ ПРОКРУТКУ
+   ========================================================= */
+
+html,
+body {
+    scrollbar-width: none;
+    -ms-overflow-style: none;
+}
+
+html::-webkit-scrollbar,
+body::-webkit-scrollbar {
+    width: 0;
+    height: 0;
+    display: none;
+}

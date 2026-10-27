@@ -1,0 +1,61 @@
+﻿# Секреты и конфигурация
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+*.p12
+*.pfx
+*credentials*
+*secret*
+
+# Python
+venv/
+.venv/
+__pycache__/
+*.pyc
+*.pyo
+.pytest_cache/
+.ruff_cache/
+
+# Frontend
+node_modules/
+dist/
+build/
+
+# Локальные данные
+backups/
+logs/
+ozon_price_diagnostic/
+yandex_payment_diagnostic/
+yandex_review_diagnostic/
+yandex_sales_diagnostic/
+
+# Экспорты и архивы
+*.xlsx
+*.xls
+*.csv
+*.zip
+*.7z
+*.dump
+*.backup
+*.bak
+*.db
+*.sqlite
+*.sqlite3
+
+# Системные файлы
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+
+# Временные файлы
+tmp/
+temp/
+.cache/
+
+# Локальные диагностические файлы
+RUN_OZON_12_OCT.bat
+ozon_check_financial_fields.py
+yandex_reconcile_2026-10-12*.sql

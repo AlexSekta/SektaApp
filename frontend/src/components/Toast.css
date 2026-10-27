@@ -1,0 +1,202 @@
+.toast {
+    position: fixed;
+
+    top: 28px;
+    right: 28px;
+
+    z-index: 100000;
+
+    width: min(420px, calc(100vw - 56px));
+    min-height: 58px;
+
+    display: flex;
+    align-items: center;
+
+    gap: 12px;
+
+    padding: 14px 16px;
+
+    background: #FFFFFF;
+
+    border: 1px solid #E5E7EB;
+    border-radius: 12px;
+
+    box-shadow: 0 12px 35px rgba(0, 0, 0, 0.14);
+
+    font-family: "Comfortaa", sans-serif;
+
+    animation: toast-in 0.18s ease-out;
+}
+
+
+/* =========================================================
+   ОБЫЧНЫЙ TOAST
+   ========================================================= */
+
+.toast-indicator {
+    flex: 0 0 4px;
+
+    align-self: stretch;
+
+    border-radius: 4px;
+
+    background: #6B7280;
+}
+
+
+.toast-error .toast-indicator {
+    background: #991B1B;
+}
+
+
+.toast-success .toast-indicator {
+    background: #1A8340;
+}
+
+
+.toast-warning .toast-indicator {
+    background: #92400E;
+}
+
+
+/* =========================================================
+   КОНТЕНТ
+   ========================================================= */
+
+.toast-content {
+    flex: 1;
+
+    min-width: 0;
+}
+
+
+.toast-message {
+    color: #2B2B2B;
+
+    font-size: 13px;
+    line-height: 1.5;
+}
+
+
+/* =========================================================
+   РЕЗУЛЬТАТЫ СИНХРОНИЗАЦИИ
+   Каждая полоска относится только к своей строке.
+   ========================================================= */
+
+.toast-with-rows {
+    align-items: flex-start;
+}
+
+
+.toast-with-rows .toast-message {
+    margin-bottom: 10px;
+
+    font-weight: 600;
+}
+
+
+.toast-rows {
+    display: flex;
+    flex-direction: column;
+
+    gap: 5px;
+}
+
+
+.toast-row {
+    min-height: 24px;
+
+    display: flex;
+    align-items: stretch;
+
+    gap: 9px;
+}
+
+
+.toast-row-indicator {
+    flex: 0 0 4px;
+
+    width: 4px;
+
+    border-radius: 4px;
+
+    background: #6B7280;
+}
+
+
+.toast-row-indicator-success {
+    background: #1A8340;
+}
+
+
+.toast-row-indicator-error {
+    background: #991B1B;
+}
+
+
+.toast-row-indicator-warning {
+    background: #92400E;
+}
+
+
+.toast-row-text {
+    display: flex;
+    align-items: center;
+
+    min-width: 0;
+
+    color: #2B2B2B;
+
+    font-size: 13px;
+    line-height: 1.5;
+}
+
+
+/* =========================================================
+   ЗАКРЫТИЕ
+   ========================================================= */
+
+.toast-close {
+    flex: 0 0 28px;
+
+    width: 28px;
+    height: 28px;
+
+    display: flex;
+    align-items: center;
+    justify-content: center;
+
+    padding: 0;
+
+    border: none;
+    border-radius: 7px;
+
+    background: transparent;
+    color: #6B7280;
+
+    font-size: 20px;
+    line-height: 1;
+
+    cursor: pointer;
+}
+
+
+.toast-close:hover {
+    background: #F3F4F6;
+    color: #2B2B2B;
+}
+
+
+@keyframes toast-in {
+
+    from {
+        opacity: 0;
+        transform: translateY(-8px);
+    }
+
+    to {
+        opacity: 1;
+        transform: translateY(0);
+    }
+
+}

@@ -1,0 +1,92 @@
+"""Read-only, organization-scoped WB weekly finance overview."""
+from fastapi import APIRouter, Depends, Request, HTTPException
+from sqlalchemy import text
+from sqlalchemy.orm import Session
+from backend.dependencies import get_db
+from backend.auth.security import require_current_user
+
+router=APIRouter(prefix='/analytics/wb-finance',tags=['Аналитика — Еженедельные отчёты'])
+
+def org_id(db):
+    oid=db.execute(text("SELECT NULLIF(current_setting('app.organization_id',true),'')::integer")).scalar()
+    if not oid: raise HTTPException(401,'Требуется организация')
+    return oid
+
+@router.get('/reports')
+def reports(request:Request,db:Session=Depends(get_db)):
+    require_current_user(request)
+    o=org_id(db)
+    rows=db.execute(text('''SELECT r.report_id,r.date_from,r.date_to,r.expected_penalty,r.expected_deduction,r.status,r.loaded_rows,r.last_error,r.updated_at,
+      coalesce(sum(e.penalty),0) penalty,coalesce(sum(e.deduction),0) deduction
+      FROM wb_finance_reports r LEFT JOIN wb_finance_entries e ON e.organization_id=r.organization_id AND e.report_id=r.report_id
+      WHERE r.organization_id=:o GROUP BY r.organization_id,r.report_id ORDER BY r.date_to DESC,r.report_id DESC'''),{'o':o}).mappings()
+    return {'items':[dict(x) for x in rows]}
+
+@router.get('/reports/{report_id}')
+def detail(report_id:int,request:Request,db:Session=Depends(get_db)):
+    require_current_user(request)
+    o=org_id(db)
+    report=db.execute(text('SELECT status,expected_penalty,expected_deduction FROM wb_finance_reports WHERE organization_id=:o AND report_id=:r'),{'o':o,'r':report_id}).mappings().first()
+    if not report:raise HTTPException(404,'Отчёт не найден')
+    groups=db.execute(text('''SELECT CASE WHEN penalty<>0 THEN 'Штраф' WHEN deduction<>0 THEN 'Удержание' ELSE 'Доплата' END kind,
+      reason,CASE WHEN nullif(nm_id,'') IS NOT NULL OR nullif(vendor_code,'') IS NOT NULL OR nullif(sku,'') IS NOT NULL THEN 'product_candidate' ELSE 'no_product_id' END attribution,
+      count(*) rows,sum(CASE WHEN penalty<>0 THEN penalty WHEN deduction<>0 THEN deduction ELSE additional_payment END) amount
+      FROM wb_finance_entries WHERE organization_id=:o AND report_id=:r AND (penalty<>0 OR deduction<>0 OR additional_payment<>0)
+      GROUP BY kind,reason,attribution ORDER BY abs(sum(CASE WHEN penalty<>0 THEN penalty WHEN deduction<>0 THEN deduction ELSE additional_payment END)) DESC'''),{'o':o,'r':report_id}).mappings()
+    return {'report':dict(report),'groups':[dict(x) for x in groups], 'note':'Привязка к товару предварительная; окончательное распределение требует проверки причины и SKU.'}
+
+@router.get('/reports/{report_id}/products')
+def products(report_id:int,request:Request,db:Session=Depends(get_db)):
+    require_current_user(request)
+    o=org_id(db)
+    exists=db.execute(text('SELECT 1 FROM wb_finance_reports WHERE organization_id=:o AND report_id=:r'),{'o':o,'r':report_id}).first()
+    if not exists:raise HTTPException(404,'Отчёт не найден')
+    rows=db.execute(text("""SELECT coalesce(nullif(vendor_code,''),nullif(nm_id,''),nullif(sku,''),'Без идентификатора') identifier,
+      count(*) FILTER(WHERE penalty<>0 OR deduction<>0) operations,
+      coalesce(sum(penalty),0) penalty,coalesce(sum(deduction),0) deduction
+      FROM wb_finance_entries WHERE organization_id=:o AND report_id=:r AND (penalty<>0 OR deduction<>0)
+      GROUP BY identifier ORDER BY abs(sum(penalty)+sum(deduction)) DESC LIMIT 500"""),{'o':o,'r':report_id}).mappings()
+    return {'items':[dict(x) for x in rows], 'limited_to':500}
+
+@router.get('/daily')
+def daily_reports(request:Request,date_from:str,date_to:str,db:Session=Depends(get_db)):
+    require_current_user(request)
+    from datetime import date
+    try:
+        start=date.fromisoformat(date_from);end=date.fromisoformat(date_to)
+    except ValueError:raise HTTPException(422,'Неверный формат даты')
+    if end<start or (end-start).days>366:raise HTTPException(422,'Диапазон должен быть не более 367 дней')
+    o=org_id(db)
+    rows=db.execute(text('''SELECT r.report_id,r.report_date,r.report_type,r.status,r.loaded_rows,r.last_error,
+      r.expected_retail,r.expected_for_pay,r.expected_bank_payment,r.expected_logistics,r.expected_penalty,r.expected_deduction,
+      coalesce(sum(CASE WHEN lower(btrim(e.operation))='возврат' THEN -e.retail ELSE e.retail END),0) retail,
+      coalesce(sum(CASE WHEN lower(btrim(e.operation))='возврат' THEN -e.for_pay ELSE e.for_pay END),0) for_pay,
+      coalesce(sum(CASE WHEN lower(btrim(e.operation))='возврат' THEN -e.commission ELSE e.commission END),0) commission,
+      coalesce(sum(CASE WHEN lower(btrim(e.operation))='возврат' THEN -e.vat ELSE e.vat END),0) vat,
+      coalesce(sum(CASE WHEN lower(btrim(e.operation))='возврат' THEN -e.acquiring ELSE e.acquiring END),0) acquiring,
+      coalesce(sum(e.logistics),0) logistics,
+      coalesce(sum(e.storage),0) storage,coalesce(sum(e.acceptance),0) acceptance,
+      coalesce(sum(e.penalty),0) penalty,coalesce(sum(e.deduction),0) deduction,
+      coalesce(sum(e.additional_payment),0) additional_payment
+      FROM wb_finance_daily_reports r LEFT JOIN wb_finance_daily_entries e
+      ON e.organization_id=r.organization_id AND e.report_id=r.report_id
+      WHERE r.organization_id=:o AND r.report_date BETWEEN :a AND :b
+      GROUP BY r.organization_id,r.report_id ORDER BY r.report_date DESC,r.report_type'''),{'o':o,'a':start,'b':end}).mappings()
+    return {'items':[dict(row) for row in rows]}
+
+@router.get('/daily/{report_id}/reasons')
+def daily_reasons(report_id:int,request:Request,db:Session=Depends(get_db)):
+    require_current_user(request)
+    o=org_id(db)
+    exists=db.execute(text('SELECT 1 FROM wb_finance_daily_reports WHERE organization_id=:o AND report_id=:r'),{'o':o,'r':report_id}).scalar()
+    if not exists:raise HTTPException(404,'Отчёт не найден')
+    rows=db.execute(text('''SELECT reason,operation,
+    CASE WHEN coalesce(nullif(vendor_code,''),nullif(nm_id,''),nullif(sku,'')) IS NULL THEN 'general' ELSE 'sku_candidate' END attribution,
+    count(*) rows,coalesce(sum(penalty),0) penalty,coalesce(sum(deduction),0) deduction,
+    coalesce(sum(logistics),0) logistics,coalesce(sum(storage),0) storage,
+    coalesce(sum(acceptance),0) acceptance
+    FROM wb_finance_daily_entries WHERE organization_id=:o AND report_id=:r
+    AND (penalty<>0 OR deduction<>0 OR logistics<>0 OR storage<>0 OR acceptance<>0)
+    GROUP BY reason,operation,attribution
+    ORDER BY abs(sum(penalty)+sum(deduction)+sum(logistics)+sum(storage)+sum(acceptance)) DESC LIMIT 250'''),{'o':o,'r':report_id}).mappings()
+    return {'items':[dict(row) for row in rows], 'limited_to':250}
