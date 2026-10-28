@@ -17,21 +17,6 @@ type WeeklyReportItem = {
   updated_at: string;
 };
 
-type ProductSummary = {
-  identifier: string;
-  operations: number;
-  penalty: string;
-  deduction: string;
-};
-
-type WeeklyGroup = {
-  kind: string;
-  reason: string;
-  attribution: string;
-  rows: number;
-  amount: string;
-};
-
 type DailyReportItem = {
   report_id: number;
   report_date: string;
@@ -69,6 +54,7 @@ type DailyMetricDetail = {
 };
 
 type ViewMode = 'daily' | 'weekly';
+type Marketplace = 'WB' | 'OZON' | 'YANDEX';
 type DailyMetricKey =
   | 'retail'
   | 'commission'
@@ -155,6 +141,7 @@ function dailyBankPayment(row: DailyReportItem | null): number {
 export default function WeeklyReport() {
   const initial = useMemo(() => defaultRange(), []);
   const [view, setView] = useState<ViewMode>('daily');
+  const [marketplace, setMarketplace] = useState<Marketplace>('WB');
   const [dateFrom, setDateFrom] = useState(initial.from);
   const [dateTo, setDateTo] = useState(initial.to);
 
@@ -169,13 +156,17 @@ export default function WeeklyReport() {
 
   const [weeklyReports, setWeeklyReports] = useState<WeeklyReportItem[]>([]);
   const [weeklySelected, setWeeklySelected] = useState<number | null>(null);
-  const [weeklyGroups, setWeeklyGroups] = useState<WeeklyGroup[]>([]);
-  const [weeklyProducts, setWeeklyProducts] = useState<ProductSummary[]>([]);
-  const [weeklyBusy, setWeeklyBusy] = useState(false);
+  const [weeklyFrom, setWeeklyFrom] = useState('2025-01-01');
+  const [weeklyTo, setWeeklyTo] = useState(initial.to);
+  const [weeklyMetric, setWeeklyMetric] = useState<'penalty' | 'deduction' | 'additional_payment' | null>(null);
+  const [weeklyDetails, setWeeklyDetails] = useState<DailyMetricDetail[]>([]);
+  const [weeklyMetricBusy, setWeeklyMetricBusy] = useState(false);
+  const [weeklyMetricError, setWeeklyMetricError] = useState('');
   const [weeklyError, setWeeklyError] = useState('');
 
   const [showScrollTop, setShowScrollTop] = useState(false);
   const dailyDetailRef = useRef<HTMLDivElement | null>(null);
+  const weeklyDetailRef = useRef<HTMLDivElement | null>(null);
 
   const loadWeekly = useCallback(async () => {
     try {
@@ -225,44 +216,30 @@ export default function WeeklyReport() {
   }, [loadDaily]);
 
   useEffect(() => {
-    if (weeklySelected === null) {
-      setWeeklyGroups([]);
-      setWeeklyProducts([]);
+    if (weeklySelected === null || weeklyMetric === null) {
+      setWeeklyDetails([]);
+      setWeeklyMetricError('');
       return;
     }
     let alive = true;
-    setWeeklyBusy(true);
-    fetch(`${api}/analytics/wb-finance/reports/${weeklySelected}`, { credentials: 'include' })
-      .then(async (response) => {
-        if (!response.ok) throw new Error(`HTTP ${response.status}`);
-        return response.json();
-      })
-      .then((data) => {
-        if (!alive) return;
-        setWeeklyGroups(data.groups || []);
-        setWeeklyError('');
-        void fetch(`${api}/analytics/wb-finance/reports/${weeklySelected}/products`, { credentials: 'include' })
-          .then(async (response) => {
-            if (!response.ok) throw new Error(`HTTP ${response.status}`);
-            return response.json();
-          })
-          .then((productData) => {
-            if (alive) setWeeklyProducts(productData.items || []);
-          })
-          .catch(() => {
-            if (alive) setWeeklyProducts([]);
-          });
-      })
-      .catch((error) => {
-        if (alive) setWeeklyError(error instanceof Error ? error.message : String(error));
-      })
-      .finally(() => {
-        if (alive) setWeeklyBusy(false);
-      });
-    return () => {
-      alive = false;
-    };
-  }, [weeklySelected]);
+    setWeeklyMetricBusy(true);
+    fetch(`${api}/analytics/wb-finance/reports/${weeklySelected}/metric-details?metric=${weeklyMetric}&limit=500`, { credentials: 'include' })
+      .then(async response => { if (!response.ok) throw new Error(`HTTP ${response.status}`); return response.json(); })
+      .then(data => { if (alive) { setWeeklyDetails(data.items || []); setWeeklyMetricError(''); } })
+      .catch(error => { if (alive) { setWeeklyMetricError(String(error)); setWeeklyDetails([]); } })
+      .finally(() => { if (alive) setWeeklyMetricBusy(false); });
+    return () => { alive = false; };
+  }, [weeklySelected, weeklyMetric]);
+
+  const visibleWeekly = useMemo(() => weeklyReports.filter(r =>
+    (!weeklyFrom || r.date_to >= weeklyFrom) && (!weeklyTo || r.date_from <= weeklyTo)
+  ), [weeklyReports, weeklyFrom, weeklyTo]);
+
+  const handleWeeklySelect = (id: number) => {
+    setWeeklySelected(id);
+    setWeeklyMetric(null);
+    requestAnimationFrame(() => weeklyDetailRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' }));
+  };
 
   useEffect(() => {
     if (selectedDaily === null || activeMetric === null) {
@@ -342,17 +319,29 @@ export default function WeeklyReport() {
     <div className="analytics-page weekly-report-page">
       <div className="analytics-header">
         <div>
-          <h1>Финансовые отчёты WB</h1>
-          <p>Ежедневные и еженедельные отчёты Wildberries с детализацией расходов и начислений.</p>
+          <h1>Финансовые отчёты</h1>
+          <p>Ежедневные и еженедельные финансовые отчёты маркетплейсов.</p>
         </div>
       </div>
 
-      <div className="wb-finance-tabs" role="tablist" aria-label="Режим просмотра финансовых отчётов WB">
+      <div className="wb-finance-controls">
+        <div className="wb-finance-marketplaces" role="group" aria-label="Маркетплейс">
+          {([['WB', 'WB'], ['OZON', 'Ozon'], ['YANDEX', 'Я.Маркет']] as const).map(([key, label]) => (
+            <button key={key} type="button" className={`wb-finance-tab${marketplace === key ? ' active' : ''}`} onClick={() => setMarketplace(key)} aria-pressed={marketplace === key}>{label}</button>
+          ))}
+        </div>
+      <div className="wb-finance-tabs" role="group" aria-label="Период отчётов">
         <button type="button" className={`wb-finance-tab${view === 'daily' ? ' active' : ''}`} onClick={() => setView('daily')}>Ежедневные</button>
         <button type="button" className={`wb-finance-tab${view === 'weekly' ? ' active' : ''}`} onClick={() => setView('weekly')}>Еженедельные</button>
       </div>
+      </div>
 
-      {view === 'daily' ? (
+      {marketplace !== 'WB' ? (
+        <section className="wb-finance-section wb-finance-upcoming" role="status">
+          <h2>{marketplace === 'OZON' ? 'Ozon' : 'Я.Маркет'}</h2>
+          <p>Финансовые отчёты для этой площадки пока не подключены. Выбранный режим: {view === 'daily' ? 'Ежедневные' : 'Еженедельные'}. Данные WB не подменяются данными другого маркетплейса.</p>
+        </section>
+      ) : view === 'daily' ? (
         <section className="wb-finance-section">
           <header className="wb-finance-section-header wb-finance-section-header--stacked">
             <div>
@@ -442,6 +431,11 @@ export default function WeeklyReport() {
                     <strong className="wb-finance-metric-value">{rub(card.value)}</strong>
                   </button>
                 ))}
+                <div className="wb-finance-metric-card wb-finance-margin-placeholder" title="Расчёт чистой прибыли будет добавлен позднее">
+                  <span className="wb-finance-metric-label">Маржа</span>
+                  <strong className="wb-finance-metric-value">—</strong>
+                  <span className="wb-finance-margin-caption">Расчёт в разработке</span>
+                </div>
               </div>
 
               <div className="wb-finance-breakdown">
@@ -463,13 +457,13 @@ export default function WeeklyReport() {
                 ) : (
                   <div className="weekly-table-wrap">
                     <table className="wb-finance-table wb-finance-table--detail">
+                      <caption className="wb-finance-count-note">Кол-во — число записей финансового отчёта, не число уникальных артикулов.</caption>
                       <thead>
                         <tr>
                           <th>Основание</th>
                           <th>Операция</th>
                           <th>SKU / артикул</th>
-                          <th>Привязка</th>
-                          <th>Строк</th>
+                          <th>Кол-во</th>
                           <th>Сумма</th>
                         </tr>
                       </thead>
@@ -478,15 +472,14 @@ export default function WeeklyReport() {
                           <tr key={`${item.reason}-${item.operation}-${item.identifier || 'general'}-${index}`}>
                             <td>{item.reason || 'Не указано'}</td>
                             <td>{item.operation || '—'}</td>
-                            <td>{item.identifier || '—'}</td>
-                            <td>{item.attribution === 'general' ? 'Общий / без SKU' : 'Кандидат на SKU'}</td>
+                            <td>{item.identifier || ''}</td>
                             <td>{item.rows.toLocaleString('ru-RU')}</td>
                             <td>{rub(item.amount)}</td>
                           </tr>
                         ))}
                         {!metricDetails.length && (
                           <tr>
-                            <td colSpan={6} className="wb-finance-empty">Для выбранного показателя нет строк с ненулевой суммой.</td>
+                            <td colSpan={5} className="wb-finance-empty">Для выбранного показателя нет строк с ненулевой суммой.</td>
                           </tr>
                         )}
                       </tbody>
@@ -499,120 +492,56 @@ export default function WeeklyReport() {
         </section>
       ) : (
         <section className="wb-finance-section">
-          <header className="wb-finance-section-header">
+          <header className="wb-finance-section-header wb-finance-section-header--stacked">
             <h2>Еженедельные отчёты WB</h2>
-            <button type="button" className="wb-finance-refresh" onClick={() => void loadWeekly()}>
-              Обновить
-            </button>
+            <div className="wb-finance-section-note">Период финансового отчёта WB, не даты заказов</div>
           </header>
-
+          <div className="wb-finance-filters">
+            <label className="wb-finance-filter"><span>С</span><DateFilter value={weeklyFrom} onChange={setWeeklyFrom} ariaLabel="Недели с даты" /></label>
+            <label className="wb-finance-filter"><span>По</span><DateFilter value={weeklyTo} onChange={setWeeklyTo} ariaLabel="Недели по дату" /></label>
+            <button type="button" className="wb-finance-refresh" onClick={() => void loadWeekly()}>Обновить</button>
+          </div>
           {weeklyError && <p role="alert" className="weekly-error">{weeklyError}</p>}
-
-          {!weeklyReports.length ? (
-            <p>Отчёты ещё не загружены. Фоновая загрузка начнётся после запуска backend; статус обновляется автоматически.</p>
-          ) : (
-            <div className="weekly-table-wrap">
-              <table className="wb-finance-table">
-                <thead>
-                  <tr>
-                    <th>Неделя</th>
-                    <th>Отчёт</th>
-                    <th>Штрафы</th>
-                    <th>Удержания</th>
-                    <th>Статус</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {weeklyReports.map((report) => (
-                    <tr
-                      key={report.report_id}
-                      className={weeklySelected === report.report_id ? 'selected' : ''}
-                      onClick={() => setWeeklySelected(report.report_id)}
-                    >
-                      <td>{formatDate(report.date_from)} — {formatDate(report.date_to)}</td>
-                      <td>{report.report_id}</td>
-                      <td>{rub(report.penalty)} / {rub(report.expected_penalty)}</td>
-                      <td>{rub(report.deduction)} / {rub(report.expected_deduction)}</td>
-                      <td>{statusLabel[report.status] || report.status}</td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
+          <div className="weekly-table-wrap">
+            <table className="wb-finance-table">
+              <thead><tr><th>Период отчёта</th><th>№ отчёта</th><th>Штрафы</th><th>Удержания</th><th>Статус</th></tr></thead>
+              <tbody>
+                {visibleWeekly.map(report => <tr key={report.report_id} className={weeklySelected === report.report_id ? 'selected' : ''} onClick={() => handleWeeklySelect(report.report_id)}>
+                  <td>{formatDate(report.date_from)} — {formatDate(report.date_to)}</td>
+                  <td>{report.report_id}</td><td>{rub(report.penalty)}</td><td>{rub(report.deduction)}</td>
+                  <td>{statusLabel[report.status] || report.status}</td>
+                </tr>)}
+                {!visibleWeekly.length && <tr><td colSpan={5} className="wb-finance-empty">Нет еженедельных отчётов за выбранный период.</td></tr>}
+              </tbody>
+            </table>
+          </div>
+          {selectedWeeklyReport && visibleWeekly.some(r => r.report_id === selectedWeeklyReport.report_id) && <div className="weekly-detail" ref={weeklyDetailRef}>
+            <h3>Отчёт №{selectedWeeklyReport.report_id} · {formatDate(selectedWeeklyReport.date_from)} — {formatDate(selectedWeeklyReport.date_to)}</h3>
+            <p className="wb-finance-detail-meta">Строк: {selectedWeeklyReport.loaded_rows.toLocaleString('ru-RU')} · {statusLabel[selectedWeeklyReport.status] || selectedWeeklyReport.status}{selectedWeeklyReport.last_error ? ` · ${selectedWeeklyReport.last_error}` : ''}</p>
+            {selectedWeeklyReport.status !== 'complete' && <p className="weekly-error">Данные предварительные: сверка ещё не завершена.</p>}
+            <div className="wb-finance-metrics-grid">
+              {([
+                { key: 'penalty', label: 'Штрафы', amount: selectedWeeklyReport.penalty },
+                { key: 'deduction', label: 'Удержания', amount: selectedWeeklyReport.deduction },
+              ] as const).map(card => <button key={card.key} type="button" className={`wb-finance-metric-card${weeklyMetric === card.key ? ' active' : ''}`} onClick={() => setWeeklyMetric(card.key)}>
+                <span className="wb-finance-metric-label">{card.label}</span><strong className="wb-finance-metric-value">{rub(card.amount)}</strong>
+              </button>)}
+              <div className="wb-finance-metric-card wb-finance-margin-placeholder"><span className="wb-finance-metric-label">Маржа</span><strong className="wb-finance-metric-value">—</strong><span className="wb-finance-margin-caption">Расчёт в разработке</span></div>
             </div>
-          )}
-
-          {selectedWeeklyReport && (
-            <div className="weekly-detail">
-              <h3>Отчёт №{selectedWeeklyReport.report_id}</h3>
-              <p>
-                Строк: {selectedWeeklyReport.loaded_rows.toLocaleString('ru-RU')} · {statusLabel[selectedWeeklyReport.status] || selectedWeeklyReport.status}.
-                {selectedWeeklyReport.last_error ? ` ${selectedWeeklyReport.last_error}` : ''}
-              </p>
-              {selectedWeeklyReport.status !== 'complete' && (
-                <p className="weekly-error">Данные предварительные, финансовая сверка ещё не подтверждена.</p>
-              )}
-              {weeklyBusy ? (
-                <p>Загрузка детализации…</p>
-              ) : (
-                <div className="weekly-table-wrap">
-                  <table className="wb-finance-table wb-finance-table--detail">
-                    <thead>
-                      <tr>
-                        <th>Тип</th>
-                        <th>Причина</th>
-                        <th>Привязка</th>
-                        <th>Операций</th>
-                        <th>Сумма</th>
-                      </tr>
-                    </thead>
-                    <tbody>
-                      {weeklyGroups.map((group, index) => (
-                        <tr key={`${group.kind}-${group.reason}-${index}`}>
-                          <td>{group.kind}</td>
-                          <td>{group.reason}</td>
-                          <td>{group.attribution === 'product_candidate' ? 'Кандидат на SKU' : 'Нет идентификатора товара'}</td>
-                          <td>{group.rows}</td>
-                          <td>{rub(group.amount)}</td>
-                        </tr>
-                      ))}
-                    </tbody>
-                  </table>
-                </div>
-              )}
-
-              <h3>Потоварная сводка штрафов и удержаний (до 500 SKU)</h3>
-              <div className="weekly-table-wrap">
-                <table className="wb-finance-table wb-finance-table--detail">
-                  <thead>
-                    <tr>
-                      <th>Артикул / nmId</th>
-                      <th>Операций</th>
-                      <th>Штрафы</th>
-                      <th>Удержания</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {weeklyProducts.map((product, index) => (
-                      <tr key={`${product.identifier}-${index}`}>
-                        <td>{product.identifier}</td>
-                        <td>{product.operations}</td>
-                        <td>{rub(product.penalty)}</td>
-                        <td>{rub(product.deduction)}</td>
-                      </tr>
-                    ))}
-                    {!weeklyProducts.length && (
-                      <tr>
-                        <td colSpan={4} className="wb-finance-empty">Детализация по товарам пока не найдена.</td>
-                      </tr>
-                    )}
-                  </tbody>
-                </table>
-              </div>
-              <p className="weekly-note">
-                Наличие nmId / vendorCode — только предварительная возможность привязки. Общие расходы и окончательное распределение по товарам будут утверждаться отдельно.
-              </p>
+            <p className="weekly-note">Пока еженедельная загрузка содержит только штрафы, удержания и доплаты. Реализация, комиссии, логистика и итог к оплате не сохраняются и не отображаются как нулевые.</p>
+            <div className="wb-finance-breakdown">
+              <div className="wb-finance-breakdown-header"><div><h4>Обоснование оплаты</h4><p>{weeklyMetric === 'penalty' ? 'Штрафы' : weeklyMetric === 'deduction' ? 'Удержания' : 'Выберите показатель выше, чтобы увидеть операции и SKU.'}</p></div></div>
+              {weeklyMetricError && <p role="alert" className="weekly-error">{weeklyMetricError}</p>}
+              {!weeklyMetric ? <div className="wb-finance-breakdown-empty">Нажмите на карточку показателя.</div>
+                : weeklyMetricBusy ? <div className="wb-finance-breakdown-empty">Загрузка детализации…</div>
+                : <div className="weekly-table-wrap"><table className="wb-finance-table wb-finance-table--detail">
+                    <caption className="wb-finance-count-note">Кол-во — количество записей финансового отчёта, не уникальных артикулов.</caption>
+                    <thead><tr><th>Основание</th><th>SKU / артикул</th><th>Кол-во</th><th>Сумма</th></tr></thead>
+                    <tbody>{weeklyDetails.map((r,i) => <tr key={`${r.identifier}-${r.reason}-${i}`}><td>{r.reason || 'Не указано'}</td><td>{r.identifier || ''}</td><td>{r.rows.toLocaleString('ru-RU')}</td><td>{rub(r.amount)}</td></tr>)}
+                    {!weeklyDetails.length && <tr><td colSpan={4} className="wb-finance-empty">Операции по этому показателю не найдены.</td></tr>}
+                    </tbody></table></div>}
             </div>
-          )}
+          </div>}
         </section>
       )}
 

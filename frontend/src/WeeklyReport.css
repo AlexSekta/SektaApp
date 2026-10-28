@@ -22,7 +22,7 @@
 
 .wb-finance-tab.active {
   background: #343434;
-  color: #7fd487;
+  color: #ffffff;
   border-color: #343434;
 }
 
@@ -446,3 +446,16 @@
     height: 46px !important;
   }
 }
+
+/* Patch 49.1 — площадки и интервалы сгруппированы отдельно */
+.wb-finance-controls { display:flex; flex-direction:column; align-items:flex-start; gap:12px; margin:8px 0 18px; }
+.wb-finance-marketplaces { display:flex; gap:10px; flex-wrap:wrap; }
+.wb-finance-tabs { margin:0; }
+.wb-finance-tab { min-height:38px; padding:10px 17px; }
+.wb-finance-tab.active { color:#fff; background:#343434; border-color:#343434; }
+.wb-finance-upcoming { color:#59626d; }
+.wb-finance-upcoming h2 { margin:0 0 10px; color:#20242a; }
+.wb-finance-margin-placeholder { cursor:default; }
+.wb-finance-margin-placeholder:hover { transform:none; border-color:transparent; }
+.wb-finance-margin-caption { color:#858b95; font-size:11px; }
+.wb-finance-count-note { caption-side:bottom; padding:9px 0; font-size:12px; color:#7b828a; text-align:left; }

@@ -122,6 +122,28 @@ def detail(report_id: int, request: Request, db: Session = Depends(get_db)):
     }
 
 
+@router.get('/reports/{report_id}/metric-details')
+def weekly_metric_details(report_id: int, request: Request, metric: str = Query(...), limit: int = Query(500, ge=1, le=1000), db: Session = Depends(get_db)):
+    require_current_user(request)
+    o = org_id(db)
+    if metric not in ('penalty', 'deduction', 'additional_payment'):
+        raise HTTPException(422, 'Недоступный показатель недельного отчёта')
+    exists = db.execute(text('SELECT 1 FROM wb_finance_reports WHERE organization_id=:o AND report_id=:r'), {'o': o, 'r': report_id}).scalar()
+    if not exists:
+        raise HTTPException(404, 'Отчёт не найден')
+    rows = db.execute(text(f'''
+        SELECT coalesce(nullif(vendor_code,''), nullif(sku,''), nullif(nm_id,''), '') identifier,
+            coalesce(nullif(reason,''), 'Не указано') reason,
+            count(*) rows, round(coalesce(sum({metric}),0),2) amount
+        FROM wb_finance_entries
+        WHERE organization_id=:o AND report_id=:r AND {metric}<>0
+        GROUP BY identifier, reason
+        ORDER BY abs(sum({metric})) DESC, identifier
+        LIMIT :limit
+    '''), {'o': o, 'r': report_id, 'limit': limit}).mappings()
+    return {'metric': metric, 'items': [dict(row) for row in rows], 'limited_to': limit}
+
+
 @router.get('/reports/{report_id}/products')
 def products(report_id: int, request: Request, db: Session = Depends(get_db)):
     require_current_user(request)
