@@ -1,0 +1,27 @@
+.penalty-dash{padding:20px;background:#fff;border:1px solid #e0e3e5;border-radius:14px;margin:22px 0;color:#343434}
+.penalty-head{display:flex;align-items:center;justify-content:space-between;gap:12px;flex-wrap:wrap}
+.penalty-head h2{margin:0;font-size:20px}.penalty-head span,.penalty-note,.penalty-foot{font-size:12px;color:#68717d}
+.penalty-filters{display:flex;align-items:center;flex-wrap:wrap;gap:12px;margin-top:18px}
+.penalty-date{display:flex;align-items:center;gap:8px;font-size:12px}.penalty-date .reviews-date-picker{width:135px}
+.penalty-picks{display:flex;gap:8px;flex-wrap:wrap}
+.penalty-picks button{padding:10px 14px;background:#f4f5f6;border:1px solid #d1d5db;border-radius:9px;cursor:pointer;color:#333;font:inherit;font-size:12px}
+.penalty-picks button.active{background:#333;border-color:#333;color:#fff}
+.penalty-cards{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:12px;margin-top:18px}
+.penalty-card{display:flex;flex-direction:column;align-items:flex-start;text-align:left;padding:16px;background:#f5f5f6;border:1px solid transparent;border-radius:12px;gap:10px;cursor:pointer;color:inherit;font:inherit;min-width:0}
+.penalty-card:hover{border-color:#c6cbd1}.penalty-card.active{border-color:#444;background:#eceef0}
+.penalty-card span{font-size:13px;color:#6b7280}.penalty-card strong{font-size:19px}.penalty-card small{font-size:11px;color:#777}
+.penalty-details{border-top:1px solid #e5e7eb;margin-top:18px;padding-top:15px}.penalty-details h3,.penalty-items h4{font-size:15px;margin:0 0 12px}
+.penalty-table-wrap{overflow-x:auto}.penalty-table-wrap table{width:100%;border-collapse:collapse;text-align:left;font-size:13px}
+.penalty-table-wrap td,.penalty-table-wrap th{padding:12px 10px;border-bottom:1px solid #e9ecef}.penalty-table-wrap th{font-weight:500;color:#66707a}
+.penalty-details>.penalty-table-wrap tbody tr{cursor:pointer}.penalty-details>.penalty-table-wrap tbody tr:hover,.penalty-details>.penalty-table-wrap tbody tr.active{background:#f0f2f4}
+.penalty-items{margin-top:16px;background:#fafafa;border-radius:10px;padding:15px}
+.penalty-error{font-size:12px;color:#ab4141}.penalty-foot{margin:16px 0 0}
+@media(max-width:650px){.penalty-cards{grid-template-columns:1fr}.penalty-head span{width:100%}}
+
+/* Exports for expanded dashboard details */
+.dashboard-xlsx-button { border: 1px solid #cbd1d6; background: #f4f5f6; color: #343434; border-radius: 9px; padding: 9px 14px; cursor: pointer; font: inherit; font-size: 12px; white-space: nowrap; }
+.dashboard-xlsx-button:hover:not(:disabled) { background: #e9ecef; }
+.dashboard-xlsx-button:disabled { opacity: .5; cursor: default; }
+.oos-details-actions { display: flex; align-items: center; gap: 8px; }
+.penalty-details-heading { display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:10px; margin-bottom:12px; }
+.penalty-details-heading h3 {margin:0;}
