@@ -25,3 +25,9 @@
 .oos-details-actions { display: flex; align-items: center; gap: 8px; }
 .penalty-details-heading { display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:10px; margin-bottom:12px; }
 .penalty-details-heading h3 {margin:0;}
+
+/* Unified total card placed to the left of marketplace cards. */
+.penalty-cards-with-total { grid-template-columns:repeat(4,minmax(0,1fr)); }
+.penalty-card-total { background:#ededee; border:1px solid #d5d8dc; cursor:default; }
+@media(max-width:950px) { .penalty-cards-with-total { grid-template-columns:repeat(2,minmax(0,1fr)); } }
+@media(max-width:650px) { .penalty-cards-with-total { grid-template-columns:1fr; } }

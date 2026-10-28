@@ -40,6 +40,9 @@ export default function PenaltiesDashboard() {
   },[from,to,valid]);
   const isAll = selected.length === 3;
   const active = openMarket && selected.includes(openMarket) ? openMarket : null;
+  const activePenalties = selected.map(m => data?.marketplaces[m]).filter((m): m is MarketData => Boolean(m?.available && m.total !== null));
+  const penaltiesTotal = activePenalties.reduce((sum, m) => sum + (m.total ?? 0), 0);
+  const penaltiesPartial = selected.some(m => !data?.marketplaces[m]?.available || data?.marketplaces[m]?.total === null);
   const market = active ? data?.marketplaces[active] : null;
   function select(m:Marketplace) {
     setSelected(prev => prev.length === 3 ? [m] : prev.includes(m) ? (prev.length === 1 ? prev : prev.filter(p => p!==m)) : all.filter(p => prev.includes(p)||p===m));
@@ -81,7 +84,12 @@ export default function PenaltiesDashboard() {
     </div>
     {!valid && <p role="alert" className="penalty-error">Укажите период не больше 367 дней, с датой начала не позже окончания.</p>}
     {error && <p role="alert" className="penalty-error">Не удалось загрузить штрафы: {error}</p>}
-    <div className="penalty-cards">
+    <div className="penalty-cards penalty-cards-with-total">
+      <div className="penalty-card penalty-card-total" aria-label="Сумма штрафов по выбранным маркетплейсам">
+        <span>Все · сумма выбранных</span>
+        <strong>{!data ? '—' : activePenalties.length ? money(penaltiesTotal) : 'Нет данных'}</strong>
+        <small>{penaltiesPartial ? 'Частичная сумма: не все МП подключены' : 'Все выбранные МП'}</small>
+      </div>
       {all.filter(m=>selected.includes(m)).map(m=>{
         const item=data?.marketplaces[m];return <button type="button" key={m} className={`penalty-card ${active===m?'active':''}`} onClick={()=>toggleMarket(m)}>
           <span>{names[m]}</span><strong>{item?.available ? money(item.total||0) : 'Нет данных'}</strong>
