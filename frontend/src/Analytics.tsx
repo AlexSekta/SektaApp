@@ -5,6 +5,7 @@ import "./Analytics.css";
 import WBReviewResponseAnalytics from "./WBReviewResponseAnalytics";
 import UnifiedSales from "./UnifiedSales";
 import PenaltiesDashboard from "./PenaltiesDashboard";
+import PayoutsDashboard from "./PayoutsDashboard";
 import { downloadWorkbook } from "./ExcelDownload";
 
 interface MarketplaceOOS {
@@ -153,6 +154,7 @@ function Analytics() {
       ) : data ? (
         <>
           <UnifiedSales />
+          <PayoutsDashboard />
           <PenaltiesDashboard />
           <section className="oos-combined-card" aria-label="Out of Stock по маркетплейсам">
             <div className="oos-summary">

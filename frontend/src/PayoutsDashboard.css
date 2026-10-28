@@ -1,0 +1,21 @@
+.payout-dash{padding:20px;background:#fff;border:1px solid #e0e3e5;border-radius:14px;margin:22px 0;color:#343434}
+.payout-head{display:flex;align-items:center;justify-content:space-between;gap:12px;flex-wrap:wrap}
+.payout-head h2{margin:0;font-size:20px}.payout-head span,.payout-note{font-size:12px;color:#68717d}
+.payout-filters{display:flex;align-items:center;flex-wrap:wrap;gap:12px;margin-top:18px}
+.payout-date{display:flex;align-items:center;gap:8px;font-size:12px}.payout-date .reviews-date-picker{width:135px}
+.payout-picks{display:flex;gap:8px;flex-wrap:wrap}
+.payout-picks button{padding:10px 14px;background:#f4f5f6;border:1px solid #d1d5db;border-radius:9px;cursor:pointer;color:#333;font:inherit;font-size:12px}
+.payout-picks button.active{background:#333;border-color:#333;color:#fff}
+.payout-cards{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:12px;margin-top:18px}
+.payout-card{display:flex;flex-direction:column;align-items:flex-start;padding:16px;background:#f5f5f6;border:1px solid transparent;border-radius:12px;gap:10px;min-width:0}
+.payout-card span{font-size:13px;color:#6b7280}.payout-card strong{font-size:19px;overflow-wrap:anywhere}.payout-card small{font-size:11px;color:#777}
+.payout-note{margin:14px 0 0}.payout-error{color:#ab4141;font-size:12px}
+@media(max-width:650px){.payout-cards{grid-template-columns:1fr}.payout-head span{width:100%}}
+
+.payout-card-button{font:inherit;color:inherit;text-align:left;cursor:pointer;width:100%}.payout-card-button:hover{background:#ededee;border-color:#d5d8dc}.payout-card-button.selected{background:#ebebed;border-color:#999}.payout-breakdown{margin-top:20px;border-top:1px solid #e3e5e8;padding-top:16px}.payout-breakdown h3{font-size:15px;margin:0}.payout-table-wrap{overflow-x:auto;margin-top:12px}.payout-period-table{width:100%;border-collapse:collapse;font-size:12px;white-space:nowrap}.payout-period-table th,.payout-period-table td{padding:11px 12px;border-bottom:1px solid #e8e9ed;text-align:left}.payout-period-table th{color:#65707a}.payout-incomplete{display:block;font-size:10px;color:#9b651c;margin-top:4px}
+
+/* Unified total card placed to the left of marketplace cards. */
+.payout-cards-with-total { grid-template-columns:repeat(4,minmax(0,1fr)); }
+.payout-card-total { background:#ededee; border:1px solid #d5d8dc; cursor:default; }
+@media(max-width:950px) { .payout-cards-with-total { grid-template-columns:repeat(2,minmax(0,1fr)); } }
+@media(max-width:650px) { .payout-cards-with-total { grid-template-columns:1fr; } }
