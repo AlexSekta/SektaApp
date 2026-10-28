@@ -93,6 +93,7 @@ from backend.services.yandex_sales_order_scheduler import start_yandex_sales_ord
 from backend.services.yandex_sales_history_scheduler import verify_yandex_sales_history_schema, start_yandex_sales_history_scheduler, stop_yandex_sales_history_scheduler
 
 from backend.api.wb_finance_reports import router as wb_finance_reports_router
+from backend.api.penalties_dashboard import router as penalties_dashboard_router
 from backend.services.wb_finance_worker import start_wb_finance_worker, stop_wb_finance_worker
 
 logger = get_logger("backend")
@@ -274,6 +275,7 @@ app.include_router(local_warehouse_router)
 app.include_router(stock_view_settings_router)
 app.include_router(sync_status_router)
 app.include_router(wb_finance_reports_router)
+app.include_router(penalties_dashboard_router)
 app.include_router(auth_router)
 app.include_router(marketplace_connections_router)
 app.include_router(organization_router)

@@ -5,7 +5,7 @@ from sqlalchemy.orm import Session
 
 from backend.dependencies import get_db
 from backend.services.auto_stock_service import calculate_auto_stock
-from backend.services.out_of_stock_service import calculate_out_of_stock
+from backend.services.out_of_stock_service import calculate_out_of_stock, current_oos_details
 from backend.services.marketplace_clients import get_ozon_client
 from backend.models.auto_stock_history import AutoStockHistory
 from backend.models.wb_review import WBReview
@@ -52,6 +52,14 @@ def out_of_stock(
     db: Session = Depends(get_db),
 ):
     return calculate_out_of_stock(db)
+
+
+@router.get("/out-of-stock/details")
+def out_of_stock_details(
+    marketplace: str = Query(..., pattern="^(WB|OZON|YANDEX)$"),
+    db: Session = Depends(get_db),
+):
+    return current_oos_details(db, marketplace)
 
 
 def _human_minutes(value):
