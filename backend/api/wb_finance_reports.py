@@ -46,31 +46,66 @@ def org_id(db: Session) -> int:
 
 
 @router.get('/reports')
-def reports(request: Request, db: Session = Depends(get_db)):
+def reports(request: Request, date_from: str | None = None, date_to: str | None = None,
+            db: Session = Depends(get_db)):
     require_current_user(request)
     o = org_id(db)
-    rows = db.execute(text('''
-        SELECT
-            r.report_id,
-            r.date_from,
-            r.date_to,
-            r.expected_penalty,
-            r.expected_deduction,
-            r.status,
-            r.loaded_rows,
-            r.last_error,
-            r.updated_at,
-            coalesce(sum(e.penalty), 0) penalty,
-            coalesce(sum(e.deduction), 0) deduction
-        FROM wb_finance_reports r
-        LEFT JOIN wb_finance_entries e
-          ON e.organization_id = r.organization_id
-         AND e.report_id = r.report_id
-        WHERE r.organization_id = :o
-        GROUP BY r.organization_id, r.report_id
-        ORDER BY r.date_to DESC, r.report_id DESC
-    '''), {'o': o}).mappings()
-    return {'items': [dict(x) for x in rows]}
+    try:
+        start = date.fromisoformat(date_from) if date_from else date(2025, 1, 1)
+        end = date.fromisoformat(date_to) if date_to else date.today()
+    except ValueError as exc:
+        raise HTTPException(422, 'Неверный формат даты') from exc
+    if end < start:
+        raise HTTPException(422, 'Дата окончания раньше начала')
+    rows = db.execute(text('''SELECT
+        r.report_id,r.date_from,r.date_to,r.report_type,r.status,r.loaded_rows,r.last_error,
+        r.expected_retail,r.expected_for_pay,r.expected_bank_payment,
+        r.expected_logistics,r.expected_storage,r.expected_acceptance,
+        r.expected_penalty,r.expected_deduction,r.expected_additional_payment,
+        coalesce(sum(CASE WHEN lower(btrim(e.operation))='возврат' THEN -e.retail ELSE e.retail END),0) retail,
+        coalesce(sum(CASE WHEN lower(btrim(e.operation))='возврат' THEN -e.for_pay ELSE e.for_pay END),0) for_pay,
+        coalesce(sum(e.commission),0) commission,
+        coalesce(sum(e.vat),0) vat,
+        coalesce(sum(e.acquiring),0) acquiring,
+        coalesce(sum(e.logistics),0) logistics,
+        coalesce(sum(e.storage),0) storage,
+        coalesce(sum(e.acceptance),0) acceptance,
+        coalesce(sum(e.penalty),0) penalty,
+        coalesce(sum(e.deduction),0) deduction,
+        coalesce(sum(e.additional_payment),0) additional_payment
+      FROM wb_finance_reports r LEFT JOIN wb_finance_entries e
+        ON e.organization_id=r.organization_id AND e.report_id=r.report_id
+      WHERE r.organization_id=:o AND r.date_from<=:end AND r.date_to>=:start
+      GROUP BY r.organization_id,r.report_id ORDER BY r.date_to DESC,r.report_id DESC'''),
+      {'o':o,'start':start,'end':end}).mappings()
+    return {'items':[dict(item) for item in rows]}
+
+
+@router.get('/reports/{report_id}/metric-details')
+def weekly_metric_details(report_id: int, request: Request,
+                          metric: str = Query(...), limit: int = Query(500, ge=1, le=1000),
+                          db: Session = Depends(get_db)):
+    require_current_user(request)
+    o = org_id(db)
+    if metric not in DAILY_METRICS:
+        raise HTTPException(422,'Неизвестный показатель')
+    report = db.execute(text('''SELECT report_id FROM wb_finance_reports
+             WHERE organization_id=:o AND report_id=:r'''),{'o':o,'r':report_id}).scalar()
+    if report is None: raise HTTPException(404,'Отчёт не найден')
+    expr,label = DAILY_METRICS[metric]
+    # Retail/forPay returned in WB detail as magnitudes: returns must be negative.
+    if metric in ('retail','for_pay'):
+        expr = f"(CASE WHEN lower(btrim(operation))='возврат' THEN -{expr} ELSE {expr} END)"
+    if metric == 'bank_payment':
+        expr = "((CASE WHEN lower(btrim(operation))='возврат' THEN -for_pay ELSE for_pay END) - logistics - storage - acceptance - penalty - deduction + additional_payment)"
+    rows=db.execute(text(f'''SELECT
+        coalesce(nullif(vendor_code,''),nullif(sku,''),nullif(nm_id,''),'') identifier,
+        reason, operation,count(*) rows, round(coalesce(sum({expr}),0),2) amount
+        FROM wb_finance_entries WHERE organization_id=:o AND report_id=:r AND {expr}<>0
+        GROUP BY identifier,reason,operation
+        ORDER BY abs(sum({expr})) DESC,count(*) DESC
+        LIMIT :limit'''),{'o':o,'r':report_id,'limit':limit}).mappings()
+    return {'metric':metric,'label':label,'items':[dict(item) for item in rows], 'limited_to':limit}
 
 
 @router.get('/reports/{report_id}')
@@ -120,28 +155,6 @@ def detail(report_id: int, request: Request, db: Session = Depends(get_db)):
         'groups': [dict(x) for x in groups],
         'note': 'Привязка к товару предварительная; окончательное распределение требует проверки причины и SKU.',
     }
-
-
-@router.get('/reports/{report_id}/metric-details')
-def weekly_metric_details(report_id: int, request: Request, metric: str = Query(...), limit: int = Query(500, ge=1, le=1000), db: Session = Depends(get_db)):
-    require_current_user(request)
-    o = org_id(db)
-    if metric not in ('penalty', 'deduction', 'additional_payment'):
-        raise HTTPException(422, 'Недоступный показатель недельного отчёта')
-    exists = db.execute(text('SELECT 1 FROM wb_finance_reports WHERE organization_id=:o AND report_id=:r'), {'o': o, 'r': report_id}).scalar()
-    if not exists:
-        raise HTTPException(404, 'Отчёт не найден')
-    rows = db.execute(text(f'''
-        SELECT coalesce(nullif(vendor_code,''), nullif(sku,''), nullif(nm_id,''), '') identifier,
-            coalesce(nullif(reason,''), 'Не указано') reason,
-            count(*) rows, round(coalesce(sum({metric}),0),2) amount
-        FROM wb_finance_entries
-        WHERE organization_id=:o AND report_id=:r AND {metric}<>0
-        GROUP BY identifier, reason
-        ORDER BY abs(sum({metric})) DESC, identifier
-        LIMIT :limit
-    '''), {'o': o, 'r': report_id, 'limit': limit}).mappings()
-    return {'metric': metric, 'items': [dict(row) for row in rows], 'limited_to': limit}
 
 
 @router.get('/reports/{report_id}/products')

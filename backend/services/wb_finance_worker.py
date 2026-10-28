@@ -46,7 +46,7 @@ def finance_request(db, path, payload):
 def work_report(org, rid):
     db = context(org)
     try:
-        job = db.execute(text('SELECT cursor_rrd,expected_penalty,expected_deduction FROM wb_finance_reports WHERE report_id=:rid AND organization_id=:org'),{'rid':rid,'org':org}).mappings().first()
+        job = db.execute(text('SELECT cursor_rrd,expected_penalty,expected_deduction,expected_retail,expected_for_pay,expected_logistics,expected_storage,expected_acceptance,expected_additional_payment,expected_bank_payment FROM wb_finance_reports WHERE report_id=:rid AND organization_id=:org'),{'rid':rid,'org':org}).mappings().first()
         if not job: return
         cursor = int(job['cursor_rrd'])
         data = finance_request(db, f'/api/finance/v1/sales-reports/detailed/{rid}', {'limit':1000,'rrdId':cursor,'fields':[]})
@@ -56,24 +56,50 @@ def work_report(org, rid):
         if data and max(ids)<=cursor: raise RuntimeError('Курсор API не продвинулся')
         for row in data:
             def dec(k): return Decimal(str(row.get(k) or 0))
-            db.execute(text('''INSERT INTO wb_finance_entries(organization_id,report_id,rrd_id,nm_id,vendor_code,sku,srid,penalty,deduction,additional_payment,reason)
-            VALUES (:o,:r,:id,:nm,:v,:sku,:srid,:p,:d,:a,:reason)
-            ON CONFLICT (organization_id,report_id,rrd_id) DO UPDATE SET nm_id=EXCLUDED.nm_id,vendor_code=EXCLUDED.vendor_code,sku=EXCLUDED.sku,srid=EXCLUDED.srid,
-            penalty=EXCLUDED.penalty,deduction=EXCLUDED.deduction,additional_payment=EXCLUDED.additional_payment,reason=EXCLUDED.reason'''),
-            {'o':org,'r':rid,'id':int(row['rrdId']),'nm':str(row.get('nmId') or '') or None,'v':str(row.get('vendorCode') or '') or None,
-            'sku':str(row.get('sku') or '') or None,'srid':str(row.get('srid') or '') or None,
-            'p':dec('penalty'),'d':dec('deduction'),'a':dec('additionalPayment'),
-            'reason':str(row.get('bonusTypeName') or row.get('sellerOperName') or row.get('docTypeName') or 'Не указано')[:500]})
-        count = db.execute(text('SELECT count(*) FROM wb_finance_entries WHERE organization_id=:o AND report_id=:r'),{'o':org,'r':rid}).scalar()
+            values = {'o':org, 'r':rid, 'id':int(row['rrdId']),
+              'nm':str(row.get('nmId') or '') or None, 'v':str(row.get('vendorCode') or '') or None,
+              'sku':str(row.get('sku') or '') or None, 'srid':str(row.get('srid') or '') or None,
+              'oper':str(row.get('sellerOperName') or '')[:250],
+              'reason':str(row.get('bonusTypeName') or row.get('sellerOperName') or row.get('docTypeName') or 'Не указано')[:500]}
+            for field, source in [('ret','retailAmount'),('pay','forPay'),('com','ppvzSalesCommission'),
+                    ('vat','vwNds'),('acq','acquiringFee'),('log','deliveryService'),
+                    ('storage','paidStorage'),('acceptance','paidAcceptance'),('pen','penalty'),
+                    ('ded','deduction'),('additional','additionalPayment')]:
+                values[field] = dec(source)
+            db.execute(text('''INSERT INTO wb_finance_entries
+              (organization_id,report_id,rrd_id,nm_id,vendor_code,sku,srid,operation,reason,
+               retail,for_pay,commission,vat,acquiring,logistics,storage,acceptance,penalty,deduction,additional_payment)
+              VALUES (:o,:r,:id,:nm,:v,:sku,:srid,:oper,:reason,
+               :ret,:pay,:com,:vat,:acq,:log,:storage,:acceptance,:pen,:ded,:additional)
+              ON CONFLICT (organization_id,report_id,rrd_id) DO UPDATE SET
+                nm_id=EXCLUDED.nm_id,vendor_code=EXCLUDED.vendor_code,sku=EXCLUDED.sku,
+                srid=EXCLUDED.srid,operation=EXCLUDED.operation,reason=EXCLUDED.reason,
+                retail=EXCLUDED.retail,for_pay=EXCLUDED.for_pay,commission=EXCLUDED.commission,
+                vat=EXCLUDED.vat,acquiring=EXCLUDED.acquiring,logistics=EXCLUDED.logistics,
+                storage=EXCLUDED.storage,acceptance=EXCLUDED.acceptance,
+                penalty=EXCLUDED.penalty,deduction=EXCLUDED.deduction,additional_payment=EXCLUDED.additional_payment'''), values)
+        sums = db.execute(text('''SELECT count(*),
+          coalesce(sum(CASE WHEN lower(btrim(operation))='возврат' THEN -retail ELSE retail END),0),
+          coalesce(sum(CASE WHEN lower(btrim(operation))='возврат' THEN -for_pay ELSE for_pay END),0),
+          coalesce(sum(logistics),0),coalesce(sum(storage),0),coalesce(sum(acceptance),0),
+          coalesce(sum(penalty),0),coalesce(sum(deduction),0),coalesce(sum(additional_payment),0)
+          FROM wb_finance_entries WHERE organization_id=:o AND report_id=:r'''),{'o':org,'r':rid}).first()
+        count = sums[0]
         if not data or len(data)<1000:
-            sums=db.execute(text('SELECT coalesce(sum(penalty),0),coalesce(sum(deduction),0) FROM wb_finance_entries WHERE organization_id=:o AND report_id=:r'),{'o':org,'r':rid}).first()
-            ok=(job['expected_penalty'] is not None and job['expected_deduction'] is not None and sums[0]==job['expected_penalty'] and sums[1]==job['expected_deduction'])
-            status='complete' if ok else 'mismatch'
-            error=None if ok else f'Сверка не пройдена: штраф={sums[0]}, удержание={sums[1]}'
+            checks = [('expected_retail',sums[1]),('expected_for_pay',sums[2]),
+              ('expected_logistics',sums[3]),('expected_storage',sums[4]),
+              ('expected_acceptance',sums[5]),('expected_penalty',sums[6]),
+              ('expected_deduction',sums[7]),('expected_additional_payment',sums[8])]
+            mismatches = [key for key,actual in checks if job[key] is not None
+                          and abs(job[key] - actual) > Decimal('0.02')]
+            status = 'mismatch' if mismatches else 'complete'
+            error = ('Несоответствие: ' + ', '.join(mismatches)) if mismatches else None
         else:
-            status='loading';error=None
-        db.execute(text('''UPDATE wb_finance_reports SET cursor_rrd=:c,loaded_rows=:n,status=:s,last_error=:e,updated_at=now() WHERE organization_id=:o AND report_id=:r'''),
-            {'c':max(ids) if ids else cursor,'n':count,'s':status,'e':error,'o':org,'r':rid})
+            status='loading'; error=None
+        db.execute(text('''UPDATE wb_finance_reports
+          SET cursor_rrd=:c,loaded_rows=:n,status=:s,last_error=:e,updated_at=now()
+          WHERE organization_id=:o AND report_id=:r'''),
+          {'c':max(ids) if ids else cursor,'n':count,'s':status,'e':error,'o':org,'r':rid})
         db.commit()
         log.info('WB_FINANCE_PAGE_OK org=%s report=%s rows=%s total=%s status=%s',org,rid,len(data),count,status)
     except Exception as exc:
@@ -90,14 +116,38 @@ def discover(org):
         today=date.today()
         # Last 4 completed weeks; long-term archive builds automatically by adding a separate backfill later.
         end=today-timedelta(days=today.weekday()+1)  # last completed Sunday
-        start=end-timedelta(days=27)
-        rows=finance_request(db,'/api/finance/v1/sales-reports/list',{'dateFrom':start.isoformat(),'dateTo':end.isoformat(),'period':'weekly','limit':100,'offset':0})
+        start=date(2025, 1, 1)
+        rows=finance_request(db,'/api/finance/v1/sales-reports/list',{'dateFrom':start.isoformat(),'dateTo':end.isoformat(),'period':'weekly','limit':1000,'offset':0})
         if rows is None: return
+        if len(rows)>=1000: raise RuntimeError('Weekly report list requires pagination; increase list limit')
         for row in rows:
             if not row.get('reportId'):continue
-            db.execute(text('''INSERT INTO wb_finance_reports(organization_id,report_id,date_from,date_to,expected_penalty,expected_deduction)
-            VALUES (:o,:r,:f,:t,:p,:d) ON CONFLICT (organization_id,report_id) DO NOTHING'''),
-            {'o':org,'r':int(row['reportId']),'f':row['dateFrom'],'t':row['dateTo'],'p':Decimal(str(row.get('penaltySum') or 0)),'d':Decimal(str(row.get('deductionSum') or 0))})
+            db.execute(text('''INSERT INTO wb_finance_reports
+              (organization_id,report_id,date_from,date_to,report_type,expected_retail,expected_for_pay,
+               expected_bank_payment,expected_logistics,expected_storage,expected_acceptance,
+               expected_penalty,expected_deduction,expected_additional_payment)
+              VALUES (:o,:r,:f,:t,:type,:ret,:pay,:bank,:log,:storage,:acceptance,:pen,:ded,:additional)
+              ON CONFLICT (organization_id,report_id) DO UPDATE SET
+                date_from=EXCLUDED.date_from,date_to=EXCLUDED.date_to,
+                report_type=EXCLUDED.report_type,expected_retail=EXCLUDED.expected_retail,
+                expected_for_pay=EXCLUDED.expected_for_pay,
+                expected_bank_payment=EXCLUDED.expected_bank_payment,
+                expected_logistics=EXCLUDED.expected_logistics,
+                expected_storage=EXCLUDED.expected_storage,
+                expected_acceptance=EXCLUDED.expected_acceptance,
+                expected_penalty=EXCLUDED.expected_penalty,
+                expected_deduction=EXCLUDED.expected_deduction,
+                expected_additional_payment=EXCLUDED.expected_additional_payment'''),
+              {'o':org,'r':int(row['reportId']),'f':row['dateFrom'],'t':row['dateTo'],
+               'type':row.get('reportType'), 'ret':Decimal(str(row.get('retailAmountSum') or 0)),
+               'pay':Decimal(str(row.get('forPaySum') or 0)),
+               'bank':Decimal(str(row.get('bankPaymentSum') or 0)),
+               'log':Decimal(str(row.get('deliveryServiceSum') or 0)),
+               'storage':Decimal(str(row.get('paidStorageSum') or 0)),
+               'acceptance':Decimal(str(row.get('paidAcceptanceSum') or 0)),
+               'pen':Decimal(str(row.get('penaltySum') or 0)),
+               'ded':Decimal(str(row.get('deductionSum') or 0)),
+               'additional':Decimal(str(row.get('additionalPaymentSum') or 0))})
         db.commit()
     except Exception as exc:
         db.rollback();log.warning('WB_FINANCE_DISCOVER_FAIL org=%s type=%s',org,type(exc).__name__)
@@ -109,6 +159,7 @@ def loop():
     last_discover=0
     last_daily_discover=0
     last_history_discover=0
+    last_kind_by_org = {}
     while not stop.is_set():
         db=SessionLocal()
         try:
@@ -139,20 +190,51 @@ def loop():
             if stop.is_set():
                 break
             try:
-                daily_rid = wb_finance_daily.next_report(org)
-                if daily_rid is not None:
-                    log.info('WB_FINANCE_DAILY_PICK org=%s report=%s', org, daily_rid)
-                    wb_finance_daily.work_one(org, daily_rid)
-                    pending = True
-                    continue
+                # Prioritize the newest calendar month across both queues.
+                # Alternate daily/weekly pages within that month to avoid starvation.
                 d = context(org)
                 try:
-                    weekly_rid = d.execute(text("SELECT report_id FROM wb_finance_reports WHERE organization_id=:o AND status IN ('queued','loading','retry') ORDER BY date_to DESC LIMIT 1"), {'o':org}).scalar()
+                    daily_job = d.execute(text("""
+                        SELECT report_id, report_date AS report_day
+                        FROM wb_finance_daily_reports
+                        WHERE organization_id=:o
+                          AND status IN ('queued','loading','retry')
+                        ORDER BY report_date DESC, report_id DESC LIMIT 1
+                    """), {'o': org}).mappings().first()
+                    weekly_job = d.execute(text("""
+                        SELECT report_id, date_to AS report_day
+                        FROM wb_finance_reports
+                        WHERE organization_id=:o
+                          AND status IN ('queued','loading','retry')
+                        ORDER BY date_to DESC, report_id DESC LIMIT 1
+                    """), {'o': org}).mappings().first()
                 finally:
                     close(d)
-                if weekly_rid is not None:
-                    work_report(org, weekly_rid)
-                    pending = True
+
+                if not daily_job and not weekly_job:
+                    continue
+
+                if daily_job and weekly_job:
+                    daily_month = (daily_job['report_day'].year, daily_job['report_day'].month)
+                    weekly_month = (weekly_job['report_day'].year, weekly_job['report_day'].month)
+                    if daily_month > weekly_month:
+                        kind = 'daily'
+                    elif weekly_month > daily_month:
+                        kind = 'weekly'
+                    else:
+                        kind = 'weekly' if last_kind_by_org.get(org) == 'daily' else 'daily'
+                else:
+                    kind = 'daily' if daily_job else 'weekly'
+
+                job = daily_job if kind == 'daily' else weekly_job
+                last_kind_by_org[org] = kind
+                log.info('WB_FINANCE_PICK org=%s kind=%s report=%s period=%s',
+                         org, kind, job['report_id'], job['report_day'])
+                if kind == 'daily':
+                    wb_finance_daily.work_one(org, job['report_id'])
+                else:
+                    work_report(org, job['report_id'])
+                pending = True
             except Exception as exc:
                 # A failed tenant must never terminate the shared background thread.
                 log.exception('WB_FINANCE_ORG_CYCLE_ERROR org=%s error=%s', org, type(exc).__name__)
