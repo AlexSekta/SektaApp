@@ -2,6 +2,7 @@
 
 The worker never mutates other marketplaces or marketplace stock records.
 """
+from backend.services.advisory_lock_connection_58_18 import lock_connection
 import os
 import threading
 from datetime import date, datetime, timedelta
@@ -120,10 +121,11 @@ def _process_org(org_id):
 
 def _loop():
     # DB advisory lock prevents concurrent backfills across uvicorn worker processes.
-    with engine.connect() as lock_conn:
+    with lock_connection() as lock_conn:
         if not lock_conn.execute(text('SELECT pg_try_advisory_lock(:key)'), {'key': _ADVISORY_LOCK}).scalar():
             logger.info('WB_HISTORY_ALREADY_RUNNING')
             return
+        lock_conn.commit()  # End transaction, retain session advisory lock.
         try:
             _stop.wait(80)  # leave room for startup and user requests
             last_request = 0.0
@@ -155,6 +157,7 @@ def _loop():
                     _stop.wait(300)
         finally:
             lock_conn.execute(text('SELECT pg_advisory_unlock(:key)'), {'key': _ADVISORY_LOCK})
+            lock_conn.commit()
 
 
 def start_wb_sales_history_scheduler():

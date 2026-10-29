@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from 'react';
-import DateFilter from './DateFilter';
+import DashboardPeriodPicker from './DashboardPeriodPicker';
 import './PenaltiesDashboard.css';
 import { downloadWorkbook } from './ExcelDownload';
 import './Reviews.css';
@@ -75,8 +75,7 @@ export default function PenaltiesDashboard() {
   return <section className="penalty-dash">
     <div className="penalty-head"><h2>Штрафы за период</h2><span>Даты финансовых отчётов</span></div>
     <div className="penalty-filters">
-      <div className="penalty-date"><span>С</span><DateFilter value={from} onChange={setFrom} ariaLabel="Начало периода штрафов" /></div>
-      <div className="penalty-date"><span>По</span><DateFilter value={to} onChange={setTo} ariaLabel="Конец периода штрафов" /></div>
+      <DashboardPeriodPicker from={from} to={to} onChange={(nextFrom,nextTo)=>{setFrom(nextFrom);setTo(nextTo)}} label="Период финансовых отчётов" />
       <div className="penalty-picks">
         <button type="button" className={isAll?'active':''} onClick={()=>{setSelected(all);setOpenMarket(null);setOpenReason(null);}}>Все</button>
         {all.map(m=><button key={m} type="button" className={!isAll && selected.includes(m)?'active':''} onClick={()=>select(m)}>{names[m]}</button>)}

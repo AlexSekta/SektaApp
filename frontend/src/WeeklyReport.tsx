@@ -1,5 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import DateFilter from './DateFilter';
+import OzonFinanceDaily from './OzonFinanceDaily';
+import OzonFinanceWeekly from './OzonFinanceWeekly';
 import './Analytics.css';
 import './WeeklyReport.css';
 
@@ -352,9 +354,11 @@ export default function WeeklyReport() {
       </div>
       </div>
 
-      {marketplace !== 'WB' ? (
+      {marketplace === 'OZON' ? (
+        view === 'daily' ? <OzonFinanceDaily /> : <OzonFinanceWeekly />
+      ) : marketplace !== 'WB' ? (
         <section className="wb-finance-section wb-finance-upcoming" role="status">
-          <h2>{marketplace === 'OZON' ? 'Ozon' : 'Я.Маркет'}</h2>
+          <h2>Я.Маркет</h2>
           <p>Финансовые отчёты для этой площадки пока не подключены. Выбранный режим: {view === 'daily' ? 'Ежедневные' : 'Еженедельные'}. Данные WB не подменяются данными другого маркетплейса.</p>
         </section>
       ) : view === 'daily' ? (

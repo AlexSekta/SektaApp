@@ -3,6 +3,7 @@
 Uses the existing atomic sync_day method; no alternative API, no new price formula.
 Owner migration is required before starting the worker.
 """
+from backend.services.advisory_lock_connection_58_18 import lock_connection
 import os
 import threading
 from datetime import date, datetime, timedelta
@@ -124,10 +125,11 @@ def _one_org(org_id):
 
 def _loop():
     # Connection-scoped advisory lock prevents duplicate workers across processes.
-    with engine.connect() as conn:
+    with lock_connection() as conn:
         if not conn.execute(text('SELECT pg_try_advisory_lock(:k)'), {'k': _LOCK_KEY}).scalar():
             log.info('OZON_ORDER_HISTORY_ALREADY_RUNNING')
             return
+        conn.commit()  # End transaction, retain session advisory lock.
         try:
             if _stop.wait(_START_DELAY):
                 return
@@ -146,6 +148,7 @@ def _loop():
                     break
         finally:
             conn.execute(text('SELECT pg_advisory_unlock(:k)'), {'k': _LOCK_KEY})
+            conn.commit()
 
 
 def start_ozon_order_history_scheduler():

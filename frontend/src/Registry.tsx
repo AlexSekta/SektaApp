@@ -378,7 +378,7 @@ function Registry() {
       try {
 
         if (marketplace === "1C") {
-          const item = Object.values(registry?.additional || {}).flat().concat(registry?.marketplace || [], registry?.finished || []).find(p => p.article === article);
+          const item = Object.values(registry?.extra || {}).flat().concat(registry?.marketplace || [], registry?.finished || []).find(p => p.article === article);
           if (!item) throw new Error("Товар не найден. Обновите страницу.");
           const response = await fetch("http://127.0.0.1:8000/local-warehouses/stock", {
             method: "PUT", credentials: "include",

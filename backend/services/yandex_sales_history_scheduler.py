@@ -3,6 +3,7 @@
 The existing live-day scheduler remains responsible for today/yesterday.  This
 worker only fills missing, completed days and does not change sales calculations.
 """
+from backend.services.advisory_lock_connection_58_18 import lock_connection
 import os
 import threading
 from datetime import date, datetime, timedelta
@@ -114,10 +115,11 @@ def _process_org(org_id):
 
 
 def _loop():
-    with engine.connect() as conn:
+    with lock_connection() as conn:
         if not conn.execute(text('SELECT pg_try_advisory_lock(:lock)'), {'lock': _ADVISORY_LOCK}).scalar():
             log.info('YANDEX_SALES_HISTORY_ALREADY_RUNNING')
             return
+        conn.commit()  # End transaction, retain session advisory lock.
         try:
             if _stop.wait(240):
                 return
@@ -145,6 +147,7 @@ def _loop():
                         return
         finally:
             conn.execute(text('SELECT pg_advisory_unlock(:lock)'), {'lock': _ADVISORY_LOCK})
+            conn.commit()
 
 
 def start_yandex_sales_history_scheduler():

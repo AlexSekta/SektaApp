@@ -118,9 +118,20 @@ def extract_lines(posting, scheme, day, fx):
         if quantity_dec != int(quantity_dec) or quantity_dec < 1:
             raise ValueError('Invalid quantity')
         quantity = int(quantity_dec)
-        currency = str(f.get('customer_currency_code') or '').upper()
+        currency = str(f.get('customer_currency_code') or '').strip().upper()
+        if not currency:
+            # Resolve only from another explicitly supplied currency on the same
+            # financial line or its uniquely matched product, never assume RUB.
+            explicit = [str(v).strip().upper() for v in (
+                f.get('currency_code'), f.get('currency'),
+                product.get('customer_currency_code'), product.get('currency_code'),
+            ) if v and str(v).strip()]
+            if explicit and len(set(explicit)) == 1:
+                currency = explicit[0]
         if not currency or currency not in fx:
-            raise ValueError(f'Unknown currency: {currency}')
+            # Do not fail the entire day's sync for an unpriced/malformed line.
+            # Any skipped line is logged and the day must remain incomplete.
+            raise ValueError(f'Unknown currency: {currency or "missing"}')
         customer = dec(f.get('customer_price'))
         seller = dec(f['price']) if f.get('price') is not None else None
         rows.append({

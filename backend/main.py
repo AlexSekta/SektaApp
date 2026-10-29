@@ -92,6 +92,8 @@ from backend.services.yandex_sales_order_sync import verify_yandex_sales_schema
 from backend.services.yandex_sales_order_scheduler import start_yandex_sales_order_scheduler, stop_yandex_sales_order_scheduler
 from backend.services.yandex_sales_history_scheduler import verify_yandex_sales_history_schema, start_yandex_sales_history_scheduler, stop_yandex_sales_history_scheduler
 
+from backend.api.ozon_finance_56 import router as ozon_finance_56_router
+from backend.services.ozon_finance_scheduler_57 import start_ozon_finance_scheduler, stop_ozon_finance_scheduler
 from backend.api.payouts_dashboard import router as payouts_dashboard_router
 from backend.api.wb_finance_reports import router as wb_finance_reports_router
 from backend.api.penalties_dashboard import router as penalties_dashboard_router
@@ -205,6 +207,7 @@ def backend_startup():
     start_wb_review_response_monitor_scheduler()
     start_wb_question_response_monitor_scheduler()
     start_ozon_sales_scheduler()
+    start_ozon_finance_scheduler()
     verify_ozon_sales_history_schema()
     start_ozon_sales_history_scheduler()
     ensure_ozon_order_tables()
@@ -242,6 +245,7 @@ def backend_shutdown():
     stop_wb_review_response_monitor_scheduler()
     stop_wb_question_response_monitor_scheduler()
     stop_ozon_sales_history_scheduler()
+    stop_ozon_finance_scheduler()
     stop_ozon_sales_scheduler()
     stop_ozon_order_scheduler()
     stop_ozon_order_history_scheduler()
@@ -276,6 +280,7 @@ app.include_router(local_warehouse_router)
 app.include_router(stock_view_settings_router)
 app.include_router(sync_status_router)
 app.include_router(wb_finance_reports_router)
+app.include_router(ozon_finance_56_router)
 app.include_router(payouts_dashboard_router)
 app.include_router(penalties_dashboard_router)
 app.include_router(auth_router)

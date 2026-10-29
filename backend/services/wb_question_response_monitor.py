@@ -100,18 +100,19 @@ def _fetch_current_unanswered(client):
 
 
 def _estimate_minutes(question_created_at, last_seen_at, left_at):
-    if not question_created_at:
+    """Missing observation timestamps must not crash the monitor or invent durations."""
+    if question_created_at is None:
         return None, None, None
-
-    lower = max(
-        0.0,
-        (last_seen_at - question_created_at).total_seconds() / 60.0,
-    )
-    upper = max(
-        lower,
-        (left_at - question_created_at).total_seconds() / 60.0,
-    )
-    return lower, upper, (lower + upper) / 2.0
+    lower = None
+    upper = None
+    if last_seen_at is not None:
+        lower = max(0.0, (last_seen_at - question_created_at).total_seconds() / 60.0)
+    if left_at is not None:
+        upper = max(0.0, (left_at - question_created_at).total_seconds() / 60.0)
+        if lower is not None:
+            upper = max(upper, lower)
+    estimate = (lower + upper) / 2.0 if lower is not None and upper is not None else None
+    return lower, upper, estimate
 
 
 def _finalize_answered(db, organization_id, now):
