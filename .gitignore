@@ -59,3 +59,6 @@ temp/
 RUN_OZON_12_OCT.bat
 ozon_check_financial_fields.py
 yandex_reconcile_2026-10-12*.sql
+
+ozon_finance_diagnostic/
+ozon_finance_diagnostic/

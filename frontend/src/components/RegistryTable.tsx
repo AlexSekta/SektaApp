@@ -136,7 +136,10 @@ function RegistryTable({
   const rawWidths = [42,12,10,10,12,14];
   const totalWidth = activeColumns.reduce((sum,i)=>sum+rawWidths[i],0);
   const widthAt = (i:number) => `${rawWidths[i]/totalWidth*100}%`;
-  const mpStock = (stock:MarketplaceStock | YandexStock, fboKey:"fbo"|"fby") => ({...stock, total:(view.fbs?stock.fbs:0)+(view.fbo?Number(stock[fboKey]):0), fbs:view.fbs?stock.fbs:0, [fboKey]:view.fbo?stock[fboKey]:0, recommendation:view.fbs&&view.fbo?stock.recommendation:{...stock.recommendation,status:"none" as const}});
+  const mpStock = (stock:MarketplaceStock | YandexStock, fboKey:"fbo"|"fby") => {
+    const warehouseStock = fboKey === "fbo" ? (stock as MarketplaceStock).fbo : (stock as YandexStock).fby;
+    return {...stock, total:(view.fbs?stock.fbs:0)+(view.fbo?warehouseStock:0), fbs:view.fbs?stock.fbs:0, [fboKey]:view.fbo?warehouseStock:0, recommendation:view.fbs&&view.fbo?stock.recommendation:{...stock.recommendation,status:"none" as const}};
+  };
   return (
 
     <div className="registry-table-wrapper">

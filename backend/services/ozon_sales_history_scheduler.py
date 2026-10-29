@@ -3,6 +3,7 @@
 Run the owner SQL migration before starting the worker. One 90-day window per
 organization per cycle, deliberately offset from the hourly live scheduler.
 """
+from backend.services.advisory_lock_connection_58_18 import lock_connection
 import os
 import threading
 from datetime import date, datetime, timedelta
@@ -104,10 +105,11 @@ def _one_org(org_id):
 
 
 def _loop():
-    with engine.connect() as dbconn:
+    with lock_connection() as dbconn:
         if not dbconn.execute(text('SELECT pg_try_advisory_lock(:key)'), {'key': _LOCK_KEY}).scalar():
             log.info('OZON_SALES_HISTORY_ALREADY_RUNNING')
             return
+        dbconn.commit()  # End transaction, retain session advisory lock.
         try:
             # Standard Ozon analytics sync runs about 65 seconds after startup.
             # Offset history far enough to avoid overlapping its API request.
@@ -132,6 +134,7 @@ def _loop():
                     return
         finally:
             dbconn.execute(text('SELECT pg_advisory_unlock(:key)'), {'key': _LOCK_KEY})
+            dbconn.commit()
 
 
 def start_ozon_sales_history_scheduler():
