@@ -5,6 +5,7 @@ from sqlalchemy.orm import Session
 from backend.logging_config import get_logger
 from backend.database import test_connection
 from backend.auth.middleware import AuthenticationMiddleware
+from backend.auth.public_protection import PublicProtectionMiddleware
 from backend.auth.tenant import ensure_multitenancy_schema, ensure_marketplace_connections_schema, ensure_team_schema
 from backend.dependencies import get_db
 
@@ -25,6 +26,9 @@ from backend.services.local_warehouse_schema import ensure_local_warehouses, ens
 from backend.api.stock_view_settings import router as stock_view_settings_router
 from backend.api.sync_status import router as sync_status_router
 from backend.api.master_products import router as master_products_router
+from backend.api.wb_identity import router as wb_identity_router
+from backend.api.marketplace_catalog_import import router as marketplace_catalog_import_router
+from backend.api.wb_unit_economy_59_3 import router as wb_unit_economy_router
 from backend.api.registry import router as registry_router
 from backend.api.ozon import router as ozon_router
 from backend.api.ozon_reviews import router as ozon_reviews_router
@@ -98,6 +102,8 @@ from backend.api.payouts_dashboard import router as payouts_dashboard_router
 from backend.api.wb_finance_reports import router as wb_finance_reports_router
 from backend.api.penalties_dashboard import router as penalties_dashboard_router
 from backend.services.wb_finance_worker import start_wb_finance_worker, stop_wb_finance_worker
+
+from backend.services.wb_unit_economy_cache_59_4 import ensure_schema as ensure_wb_unit_schema, start_scheduler as start_wb_unit_scheduler, stop_scheduler as stop_wb_unit_scheduler
 
 logger = get_logger("backend")
 
@@ -201,6 +207,8 @@ def backend_startup():
     ensure_local_warehouses()
     ensure_stock_view_settings()
     ensure_marketplace_connections_schema()
+    ensure_wb_unit_schema()
+    start_wb_unit_scheduler()
     ensure_stock_history_warehouse_id_schema()
     start_yandex_question_scheduler()
     start_wb_reviews_scheduler()
@@ -233,6 +241,7 @@ def backend_startup():
 
 @app.on_event("shutdown")
 def backend_shutdown():
+    stop_wb_unit_scheduler()
 
     stop_wb_finance_worker()
     stop_wb_sales_live_scheduler()
@@ -258,6 +267,7 @@ def backend_shutdown():
 # =========================================================
 
 app.add_middleware(AuthenticationMiddleware)
+app.add_middleware(PublicProtectionMiddleware)
 
 # =========================================================
 # CORS
@@ -281,6 +291,7 @@ app.include_router(stock_view_settings_router)
 app.include_router(sync_status_router)
 app.include_router(wb_finance_reports_router)
 app.include_router(ozon_finance_56_router)
+app.include_router(wb_unit_economy_router)
 app.include_router(payouts_dashboard_router)
 app.include_router(penalties_dashboard_router)
 app.include_router(auth_router)
@@ -293,6 +304,8 @@ app.include_router(
     tags=["Остатки"],
 )
 
+app.include_router(wb_identity_router)
+app.include_router(marketplace_catalog_import_router)
 app.include_router(
     master_products_router,
     tags=["Реестр"],

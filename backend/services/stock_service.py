@@ -3,6 +3,7 @@ from datetime import date, datetime
 from sqlalchemy.orm import Session
 
 from backend.models.product import Product
+from backend.services.wb_identity_service import active_article
 from backend.models.stock_history import StockHistory
 from backend.models.warehouse import Warehouse
 from backend.auth.tenant import set_app_db_role, set_tenant_context
@@ -23,7 +24,10 @@ def sync_wb_stocks(
 
     client = get_wb_client(db)
 
-    products = db.query(Product).all()
+    products = db.query(Product).filter(
+        Product.marketplace == "WB",
+        ~Product.seller_article.like("WB_RETIRED:%"),
+    ).all()
 
     skus = [product.barcode for product in products if product.barcode]
 
@@ -76,6 +80,9 @@ def sync_wb_stocks(
         if existing:
 
             existing.stock = stock_value
+            existing.seller_article = active_article(db, product)
+            existing.nm_id = product.nm_id
+            existing.warehouse_type = "SELLER"
             existing.created_at = datetime.utcnow()
 
         else:
@@ -86,7 +93,7 @@ def sync_wb_stocks(
                 warehouse_id=str(warehouse_id),
                 warehouse_name=warehouse_name,
                 warehouse_type="SELLER",
-                seller_article=product.seller_article,
+                seller_article=active_article(db, product),
                 nm_id=product.nm_id,
                 sku=str(sku),
                 stock=stock_value,
@@ -195,7 +202,9 @@ def sync_wb_fbo_stocks(
     products = (
         db.query(Product)
         .filter(
+            Product.marketplace == "WB",
             Product.nm_id.isnot(None),
+            ~Product.seller_article.like("WB_RETIRED:%"),
         )
         .all()
     )
@@ -301,7 +310,7 @@ def sync_wb_fbo_stocks(
                 or existing.warehouse_name
             )
             existing.warehouse_type = "FBO"
-            existing.seller_article = product.seller_article
+            existing.seller_article = active_article(db, product)
             existing.nm_id = product.nm_id
             existing.created_at = datetime.utcnow()
 
@@ -313,7 +322,7 @@ def sync_wb_fbo_stocks(
                 warehouse_id=warehouse_id_string,
                 warehouse_name=warehouse_name or "WB",
                 warehouse_type="FBO",
-                seller_article=product.seller_article,
+                seller_article=active_article(db, product),
                 nm_id=product.nm_id,
                 sku=sku_string,
                 stock=stock_value,

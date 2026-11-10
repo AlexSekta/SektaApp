@@ -4,6 +4,8 @@ from sqlalchemy import func, text
 
 from backend.dependencies import get_db
 from backend.models.master_product import MasterProduct
+from backend.models.product import Product
+from backend.models.wb_identity import WBIdentityLink
 from backend.models.stock_history import StockHistory
 from backend.models.one_c_stock import OneCStock
 
@@ -116,6 +118,36 @@ def build_marketplace_stock(
         "fbs": fbs,
         "fbs_managed": True,
     }
+
+
+def build_wb_stock_for_master(db: Session, master_id: int, article: str, links_by_master: dict, linked_nm_ids: set):
+    """Use WB nmID (both FBS and FBO) for confirmed master mapping.
+    Without a confirmed link, legacy article matching remains available but
+    may not consume rows already claimed by a different master.
+    """
+    ids = links_by_master.get(master_id) or []
+    rows = db.query(StockHistory).filter(StockHistory.marketplace == 'WB',
+        StockHistory.warehouse_type.in_(['SELLER','FBO']))
+    if ids:
+        rows = rows.filter(StockHistory.nm_id.in_(ids))
+    else:
+        rows = rows.filter(StockHistory.seller_article == article)
+        if linked_nm_ids:
+            rows = rows.filter(~StockHistory.nm_id.in_(linked_nm_ids))
+    all_rows = rows.order_by(StockHistory.created_at.desc()).all()
+    latest_fbs = {}
+    latest_fbo_day = None
+    fbo = 0
+    for row in all_rows:
+        if row.warehouse_type == 'SELLER':
+            key = (row.nm_id, row.warehouse_id, row.sku)
+            latest_fbs.setdefault(key, row.stock)
+        elif latest_fbo_day is None:
+            latest_fbo_day = row.date
+    if latest_fbo_day is not None:
+        fbo = sum(row.stock for row in all_rows if row.warehouse_type == 'FBO' and row.date == latest_fbo_day)
+    fbs = sum(latest_fbs.values())
+    return {'total':fbo+fbs,'fbo':fbo,'fbs':fbs,'fbs_managed':True}
 
 
 def build_yandex_stock(
@@ -248,6 +280,10 @@ def get_product_updated_at(
 def get_products_by_group(
     db: Session,
     group: str,
+    wb_articles: set | None = None,
+    renamed_wb_articles: set | None = None,
+    links_by_master: dict | None = None,
+    linked_nm_ids: set | None = None,
 ):
 
     products = (
@@ -277,11 +313,9 @@ def get_products_by_group(
 
         stock_1c = one_c.stock if one_c else 0
 
-        wb = build_marketplace_stock(
-            db,
-            product.seller_article,
-            "WB",
-            "SELLER",
+        wb = build_wb_stock_for_master(
+            db, product.id, product.seller_article,
+            links_by_master or {}, linked_nm_ids or set(),
         )
 
         ozon = build_marketplace_stock(
@@ -295,6 +329,15 @@ def get_products_by_group(
             db,
             product.seller_article,
         )
+
+        # A retired WB vendorCode must not show a stale stock number (or zero).
+        # The same article can remain active on Ozon and Yandex.
+        wb_unavailable = (
+            not (links_by_master or {}).get(product.id)
+            and (product.seller_article in (renamed_wb_articles or set())
+                 or (bool(product.wb_enabled) and product.seller_article not in (wb_articles or set())))
+        )
+        wb["available"] = not wb_unavailable
 
         wb["recommendation"] = build_recommendation(
             stock_1c,
@@ -319,6 +362,9 @@ def get_products_by_group(
             yandex["fby"],
             yandex["fbs"],
         )
+
+        if wb_unavailable:
+            wb["recommendation"]["status"] = "none"
 
         result.append(
             {
@@ -345,20 +391,53 @@ def get_registry(
     db: Session = Depends(get_db),
 ):
 
+    # Detect historical WB articles whose nmID is currently attached to a
+    # different vendorCode. Historical StockHistory records remain unchanged.
+    wb_products = db.query(Product).filter(Product.marketplace == "WB").all()
+    wb_articles = {p.seller_article for p in wb_products}
+    current_by_nm = {str(p.nm_id): p.seller_article for p in wb_products}
+    renamed_wb_articles = set()
+    for old_article, old_nm_id in db.query(
+        StockHistory.seller_article, StockHistory.nm_id
+    ).filter(StockHistory.marketplace == "WB").distinct().all():
+        current_article = current_by_nm.get(str(old_nm_id))
+        if current_article and old_article != current_article:
+            renamed_wb_articles.add(old_article)
+
+    approved_links = db.query(WBIdentityLink).all()
+    links_by_master = {}
+    linked_nm_ids = set()
+    for link in approved_links:
+        links_by_master.setdefault(link.master_id, []).append(link.nm_id)
+        linked_nm_ids.add(link.nm_id)
+    # Do not display stale WB stock under the previous vendorCode of a confirmed nmID.
+    for product in wb_products:
+        for link in approved_links:
+            if product.nm_id == link.nm_id and product.seller_article != link.current_article:
+                renamed_wb_articles.add(product.seller_article)
+
     additional = {}
     oid = db.execute(text("SELECT NULLIF(current_setting('app.organization_id',true),'')::integer")).scalar()
     if oid is not None:
         for (name,) in db.execute(text("SELECT name FROM local_warehouses WHERE organization_id=:o AND name NOT IN ('Маркетплейс','Готовая продукция') ORDER BY id"), {"o": oid}):
-            additional[name] = get_products_by_group(db, name)
+            additional[name] = get_products_by_group(db, name, wb_articles, renamed_wb_articles, links_by_master, linked_nm_ids)
     return {
         "extra": additional,
         "marketplace": get_products_by_group(
             db,
             "Маркетплейс",
+            wb_articles,
+            renamed_wb_articles,
+            links_by_master,
+            linked_nm_ids,
         ),
 
         "finished": get_products_by_group(
             db,
             "Готовая продукция",
+            wb_articles,
+            renamed_wb_articles,
+            links_by_master,
+            linked_nm_ids,
         ),
     }

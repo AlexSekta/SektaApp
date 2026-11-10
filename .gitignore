@@ -62,3 +62,8 @@ yandex_reconcile_2026-10-12*.sql
 
 ozon_finance_diagnostic/
 ozon_finance_diagnostic/
+
+# Local logs and backups
+deployment/*.log
+*.dump
+*.backup

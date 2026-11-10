@@ -16,6 +16,7 @@ interface Recommendation {
 
 
 interface MarketplaceStock {
+  available?: boolean;
   total: number;
   fbo: number;
   fbs: number;
@@ -236,7 +237,11 @@ function RegistryTable({
 
                   {view.wb && <td style={{width:widthAt(2)}}>
 
-                    <div className="stock-cell">
+                    {item.wb.available === false ? (
+                      <div className="stock-cell" title="Артикул отсутствует на WB или заменён; остатки других маркетплейсов сохранены">
+                        <span aria-label="Нет действующей карточки WB">—</span>
+                      </div>
+                    ) : <div className="stock-cell">
                       <StockPopover
                         title="WB"
                         marketplace="WB"
@@ -259,7 +264,7 @@ function RegistryTable({
                           </span>
                         )}
                       </StockPopover>
-                    </div>
+                    </div>}
 
                   </td>}
 

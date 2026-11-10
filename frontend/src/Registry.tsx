@@ -35,6 +35,7 @@ interface Recommendation {
 }
 
 interface MarketplaceStock {
+  available?: boolean;
   total: number;
   fbo: number;
   fbs: number;
@@ -710,7 +711,7 @@ function Registry() {
       "Артикул": item.article,
       "Наименование": item.name,
       "Остаток 1С": Number(item.stock_1c) || 0,
-      "WB": Number(item.wb?.total) || 0,
+      "WB": item.wb?.available === false ? "—" : (Number(item.wb?.total) || 0),
       "OZON": Number(item.ozon?.total) || 0,
       "ЯМаркет": Number(item.yandex?.total) || 0
     }));
