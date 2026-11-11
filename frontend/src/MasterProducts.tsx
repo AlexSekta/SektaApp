@@ -5,11 +5,22 @@ import "./MasterProducts.css";
 interface ImportCard { marketplace:MP; external_id:string; article:string; name:string;
   barcodes:string[]; dimensions:{length_cm:number;width_cm:number;height_cm:number}|null;
   platform_ids:Record<string,string>; status:"NEW"|"MATCH"|"LINKED"|"CONFLICT";
-  master_id:number|null; suggested_master_id:number|null; }
+  master_id:number|null; suggested_master_id:number|null; conflict_reason?:string|null; }
 interface ImportPreview { marketplace:MP; total:number; items:ImportCard[];
   summary:Record<string,number>; read_only:boolean; }
 interface AttentionItem { id:number; marketplace:string; nm_id:string; article:string;
   old_article:string|null; reason:string; status:string; title:string|null; master_id:number|null; }
+interface BulkLinkRow {nm_id:string;article:string;master_id:number;master_name:string;wb_title:string;local_product_id:number;}
+interface BulkLinkPreview {proposals:BulkLinkRow[];skipped:{nm_id:string;article:string;reason:string}[];fingerprint:string;read_only:boolean;}
+interface BarcodeAlert {nm_id:string;article:string;master_id:number;title:string;catalog_barcode:string;wb_barcodes:string[];problem:string;}
+interface BarcodePreview {master_id:number;nm_id:string;article:string;catalog_barcode:string;wb_barcodes:string[];new_barcode:string;fingerprint:string;}
+interface DimensionFillChange {field:string;old_cm:number|null;new_cm:number;}
+interface DimensionProblem { code:string;field:string;field_label:string;catalog_cm:number|null;marketplace_cm:number|null; }
+interface DimensionAlert { marketplace:string; nm_id:string; article:string;title:string;master_id:number;problems:DimensionProblem[]; catalog_dimensions:Record<DimensionKey,number|null>;marketplace_dimensions:Record<DimensionKey,number|null>; }
+type DimensionKey="length_cm"|"width_cm"|"height_cm";
+interface ManualPreview {master_id:number;nm_id:string;article:string;catalog:Record<DimensionKey,number|null>;wb:Record<DimensionKey,number|null>;changes:DimensionFillChange[];fingerprint:string;}
+const dimensionKeys:DimensionKey[]=["length_cm","width_cm","height_cm"];
+const dimensionLabels:Record<DimensionKey,string>={length_cm:"Длина",width_cm:"Ширина",height_cm:"Высота"};
 type MP = "WB" | "OZON" | "YANDEX";
 type ProductStatus = "READY" | "SELLING" | "ARCHIVE";
 interface Product {
@@ -24,6 +35,39 @@ interface Form { internal_article:string; seller_article:string; barcode:string;
   wb_enabled:boolean; ozon_enabled:boolean; yandex_enabled:boolean; active:boolean; status:ProductStatus; }
 const API="http://127.0.0.1:8000";
 const EMPTY:Form={internal_article:"",seller_article:"",barcode:"",name:"",group:"Маркетплейс",purchase_price:"",additional_costs:"0",length_cm:"",width_cm:"",height_cm:"",wb_enabled:false,ozon_enabled:false,yandex_enabled:false,active:false,status:"READY"};
+const IMPORT_CONFLICTS:Record<string,string>={
+  IDENTITY_DISAGREEMENT:"Связи WB расходятся между реестрами. Нужна ручная проверка.",
+  CONFIRMED_MASTER_MISSING:"Подтверждённая связь указывает на отсутствующий товар.",
+  WB_ARTICLE_CHANGED:"Артикул на WB изменился после подтверждения связи.",
+  IMPORTED_ARTICLE_CHANGED:"Артикул изменился после импорта.",
+  DUPLICATE_CATALOG_ARTICLE:"В общем каталоге несколько товаров с этим артикулом.",
+  ARTICLE_USED_BY_ANOTHER_CARD:"Артикул уже используется другой импортированной карточкой.",
+  WB_ARTICLE_USED_BY_ANOTHER_CARD:"Артикул уже закреплён за другим nmID WB."
+};
+const ATTENTION_REASONS:Record<string,{label:string;description:string}> = {
+  MISSING_LOCAL_CARD:{label:"Не завершено сопоставление",description:"Карточка найдена на Wildberries, но отсутствует локальная запись по nmID. Проверьте, есть ли товар в общем каталоге: можно связать существующий либо создать новый."},
+  NO_MASTER_PRODUCT:{label:"Нет товара в общем каталоге",description:"Карточка WB найдена, но товар с этим артикулом отсутствует в общем справочнике."},
+  DUPLICATE_NM_ID:{label:"Дублируется nmID",description:"В локальных карточках WB обнаружено несколько записей с одним nmID."},
+  ARTICLE_COLLISION:{label:"Артикул занят другой карточкой",description:"Один артикул связан с другим nmID; требуется ручная проверка."},
+  ARTICLE_CHANGED:{label:"Артикул изменён на WB",description:"У карточки с тем же nmID обнаружен новый артикул продавца."},
+  RETIRED_ARTICLE_COLLISION:{label:"Старая карточка архивирована",description:"Старый nmID сохранён для истории; действующая карточка должна иметь отдельную связь."},
+};
+const attentionReason=(reason:string)=>ATTENTION_REASONS[reason]||{label:"Неизвестная проблема",description:`Код: ${reason}. Требуется проверка.`};
+function ProblemHint({description}:{description:string}){
+  const [position,setPosition]=useState<{top:number;left:number}|null>(null);
+  const show=(target:HTMLElement)=>{
+    const rect=target.getBoundingClientRect();
+    setPosition({top:Math.max(8,Math.min(rect.top-18,window.innerHeight-100)),left:Math.max(8,Math.min(rect.right+12,window.innerWidth-308))});
+  };
+  return <span className="product-attention-hint">
+    <button type="button" className="product-attention-hint-trigger" aria-label="Описание проблемы"
+      aria-expanded={!!position} onMouseEnter={e=>show(e.currentTarget)} onMouseLeave={()=>setPosition(null)}
+      onFocus={e=>show(e.currentTarget)} onBlur={()=>setPosition(null)}
+      onClick={e=>{if(position)setPosition(null);else show(e.currentTarget);}}>i</button>
+    {position&&createPortal(<span className="product-attention-hint-popup" role="tooltip" style={{position:"fixed",top:position.top,left:position.left,visibility:"visible",opacity:1}}>{description}</span>,document.body)}
+  </span>;
+}
+
 const money=(n:number)=>new Intl.NumberFormat("ru-RU",{minimumFractionDigits:2,maximumFractionDigits:2}).format(n);
 const n=(v:number|null)=>v==null?"—":new Intl.NumberFormat("ru-RU",{maximumFractionDigits:2}).format(v);
 const formOf=(p:Product):Form=>({internal_article:p.internal_article||"",seller_article:p.seller_article||"",barcode:p.barcode||"",name:p.name||"",group:p.group||"Маркетплейс",purchase_price:String(p.purchase_price??""),additional_costs:String(p.additional_costs??0),length_cm:p.length_cm==null?"":String(p.length_cm),width_cm:p.width_cm==null?"":String(p.width_cm),height_cm:p.height_cm==null?"":String(p.height_cm),wb_enabled:p.wb_enabled,ozon_enabled:p.ozon_enabled,yandex_enabled:p.yandex_enabled,active:p.active,status:p.status || (p.active ? "SELLING" : "READY")});
@@ -96,6 +140,24 @@ function CustomSelect<T extends string>({
 }
 
 function MasterProducts(){
+  const [confirmation,setConfirmation]=useState<{title:string;message:string;confirmLabel:string;danger?:boolean}|null>(null);
+  const confirmationResolver=useRef<((value:boolean)=>void)|null>(null);
+  const requestConfirmation=(title:string,message:string,confirmLabel="Подтвердить",danger=false):Promise<boolean>=>{
+    // Never leave a pending confirmation unresolved if another one is requested.
+    confirmationResolver.current?.(false);
+    return new Promise(resolve=>{
+      confirmationResolver.current=resolve;
+      setConfirmation({title,message,confirmLabel,danger});
+    });
+  };
+  const finishConfirmation=(approved:boolean)=>{
+    const resolve=confirmationResolver.current;
+    confirmationResolver.current=null;
+    setConfirmation(null);
+    resolve?.(approved);
+  };
+  useEffect(()=>()=>{confirmationResolver.current?.(false);confirmationResolver.current=null;},[]);
+  const [attentionExplanation,setAttentionExplanation]=useState<AttentionItem|null>(null);
   const [importVisible,setImportVisible]=useState(false);
   const [importMarket,setImportMarket]=useState<MP>("WB");
   const [importPreview,setImportPreview]=useState<ImportPreview|null>(null);
@@ -105,6 +167,13 @@ function MasterProducts(){
   const [importSelected,setImportSelected]=useState<Record<string,boolean>>({});
   const [importTargets,setImportTargets]=useState<Record<string,string>>({});
   const [importResults,setImportResults]=useState<string[]>([]);
+  // Generic catalog creation flow. The source marketplace is a parameter,
+  // not a WB-specific creation path; other marketplaces use the same importer.
+  const [createFromCard,setCreateFromCard]=useState<ImportCard|null>(null);
+  const [createBusy,setCreateBusy]=useState(false);
+  const [createError,setCreateError]=useState("");
+  const [createLoading,setCreateLoading]=useState(false);
+  const [createCheckingId,setCreateCheckingId]=useState<string|null>(null);
   const [marketCards,setMarketCards]=useState<{marketplace:string;external_id:string;seller_article:string;title:string|null;barcode:string|null;dimensions:{length_cm:number;width_cm:number;height_cm:number}|null;platform_ids:Record<string,string>}[]>([]);
   const readResponse=async(r:Response)=>{
     const raw=await r.text();let value:any=null;
@@ -122,7 +191,7 @@ function MasterProducts(){
     if(!importPreview)return;
     const chosen=importPreview.items.filter(x=>importSelected[x.external_id] && x.status!=="LINKED" && x.status!=="CONFLICT");
     if(!chosen.length){setImportError("Отметьте карточки со статусом «Новый» или «Найден товар».");return}
-    if(!confirm(`Импортировать ${chosen.length} карточек ${importMarket}? Проверь выбранные связи. Новые товары будут «Готовится» и не попадут в реестр/OOS.`))return;
+    if(!await requestConfirmation("Подтверждение импорта",`Импортировать ${chosen.length} карточек ${importMarket}? Проверь выбранные связи. Новые товары будут «Готовится» и не попадут в реестр/OOS.`,"Импортировать"))return;
     setImportLoading(true);setImportError("");
     try{
       const items=chosen.map(card=>({external_id:card.external_id,article:card.article,
@@ -163,21 +232,183 @@ function MasterProducts(){
   const [tab,setTab]=useState<"catalog"|"attention">("catalog");
   const [alerts,setAlerts]=useState<AttentionItem[]>([]);
   const [attentionBusy,setAttentionBusy]=useState(false);
+  const [attentionSearch,setAttentionSearch]=useState("");
+  const [attentionError,setAttentionError]=useState("");
+  const [dimensionAlerts,setDimensionAlerts]=useState<DimensionAlert[]>([]);
+  const [barcodeAlerts,setBarcodeAlerts]=useState<BarcodeAlert[]>([]);
+  const [barcodeDetail,setBarcodeDetail]=useState<BarcodeAlert|null>(null);
+  const [barcodeValue,setBarcodeValue]=useState("");
+  const [barcodePreview,setBarcodePreview]=useState<BarcodePreview|null>(null);
+  const [barcodeBusy,setBarcodeBusy]=useState(false);
+  const [barcodeError,setBarcodeError]=useState("");
+  const [dimensionAudit,setDimensionAudit]=useState<{
+    counts:Record<string,number>;
+    excluded:{nm_id:string;article:string;reason:string;master_id:number|null}[];
+  }|null>(null);
+  const [showAuditExcluded,setShowAuditExcluded]=useState(false);
+  const [bulkLinkPreview,setBulkLinkPreview]=useState<BulkLinkPreview|null>(null);
+  const [bulkLinkSelected,setBulkLinkSelected]=useState<Record<string,boolean>>({});
+  const [bulkLinkBusy,setBulkLinkBusy]=useState(false);
+  const [bulkLinkError,setBulkLinkError]=useState("");
+  const previewBulkLinks=async()=>{
+    setBulkLinkBusy(true);setBulkLinkError("");
+    try{
+      const data=await readResponse(await fetch(`${API}/product-attention/bulk-links/preview`,{method:"POST"})) as BulkLinkPreview;
+      if(!Array.isArray(data.proposals)||!Array.isArray(data.skipped)||!data.fingerprint)throw Error("Неверный ответ сервера");
+      setBulkLinkPreview(data);setBulkLinkSelected({});
+    }catch(e){setBulkLinkError(e instanceof Error?e.message:"Не удалось сопоставить карточки");}
+    finally{setBulkLinkBusy(false);}
+  };
+  const applyBulkLinks=async()=>{
+    if(!bulkLinkPreview||bulkLinkBusy)return;
+    const selected=bulkLinkPreview.proposals.filter(p=>bulkLinkSelected[p.nm_id]).map(p=>p.nm_id);
+    if(!selected.length)return;
+    if(!await requestConfirmation("Подтвердить связи WB",`Будут созданы ${selected.length} подтверждённых связей nmID → товар. Ни размеры, ни названия, ни остатки не изменятся.`,"Подтвердить выбранные"))return;
+    setBulkLinkBusy(true);setBulkLinkError("");
+    try{
+      const result=await readResponse(await fetch(`${API}/product-attention/bulk-links/apply`,{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({preview_fingerprint:bulkLinkPreview.fingerprint,selected_nm_ids:selected})}));
+      setBulkLinkPreview(null);setBulkLinkSelected({});
+      await scanAttention();
+      setMessage(`Подтверждено связей WB: ${result.linked}. Выполнена новая сверка габаритов.`);
+    }catch(e){setBulkLinkError(e instanceof Error?e.message:"Не удалось подтвердить связи");}
+    finally{setBulkLinkBusy(false);}
+  };
+
+  const openCreateFromMarketplace=async(marketplace:MP,externalId:string,article:string)=>{
+    setCreateCheckingId(`${marketplace}:${externalId}`);
+    setCreateLoading(true);setCreateError("");setCreateFromCard(null);
+    try{
+      // Preview from the actual marketplace, never from stale review text.
+      const data=await readResponse(await fetch(`${API}/catalog-import/${marketplace}/preview`)) as ImportPreview;
+      const matching=data.items.filter(c=>c.external_id===externalId&&c.article===article);
+      if(matching.length!==1)throw Error("Карточка изменилась или не найдена на площадке. Обновите сверку.");
+      if(matching[0].status!=="NEW"){
+        if(matching[0].status==="MATCH") {
+          const existing=products.find(p=>p.id===matching[0].suggested_master_id);
+          throw Error(`Товар ${existing?.seller_article||matching[0].article} уже есть в общем каталоге. Выберите его в списке «Связать с товаром» и нажмите «Подтвердить». Создание дубликата запрещено.`);
+        }
+        throw Error("У карточки уже есть подтверждённая связь или конфликт. Создание дубликата запрещено; проверьте сопоставление.");
+      }
+      if(!matching[0].article.trim())throw Error("У карточки нет артикула. Создание требует ручной проверки.");
+      setCreateFromCard(matching[0]);
+    }catch(e){setCreateError(e instanceof Error?e.message:"Не удалось проверить карточку");}
+    finally{setCreateLoading(false);setCreateCheckingId(null);}
+  };
+  const confirmCreateFromMarketplace=async()=>{
+    const card=createFromCard;
+    if(!card||createBusy)return;
+    setCreateBusy(true);setCreateError("");
+    try{
+      // Creation has its own endpoint: import-one returns `imported` and may
+      // silently attach an existing master; create-one must return `created`.
+      const result=await readResponse(await fetch(`${API}/catalog-import/${card.marketplace}/create-one`,{
+        method:"POST",headers:{"Content-Type":"application/json"},
+        body:JSON.stringify({external_id:card.external_id,article:card.article,master_id:null})
+      }));
+      if(result.status!=="created"||!Number.isInteger(result.master_id)||result.master_id<=0){
+        throw Error("Сервер не подтвердил создание товара. Проверьте каталог перед повторной попыткой.");
+      }
+      // The server committed the new master and marketplace link. Close the
+      // dialog immediately; no subsequent UI refresh can undo that success.
+      setCreateFromCard(null);
+      setTab("catalog");
+      setSearch("");setMp("ALL");setStatusFilter("ALL");
+      let catalogUpdated=false;
+      try{await load();catalogUpdated=true;}
+      catch(e){setMessage(`Товар ${card.article} создан, но список не обновлён: ${e instanceof Error?e.message:"ошибка загрузки"}. Обновите страницу.`);}
+      // Re-scan reconciles the previously open identity review and refreshes
+      // attention counts. A scan failure is not a failed creation.
+      try{await scanAttention();}
+      catch{ /* scanAttention reports its error in attentionError */ }
+      if(catalogUpdated){
+        setMessage(`Товар ${card.article} успешно создан в каталоге. Статус «Готовится», реестр выключен.`);
+      }
+    }catch(e){setCreateError(e instanceof Error?e.message:"Не удалось создать товар");}
+    finally{setCreateBusy(false);}
+  };
+
+  const [dimensionDetail,setDimensionDetail]=useState<DimensionAlert|null>(null);
+  const [dimensionInputs,setDimensionInputs]=useState<Record<DimensionKey,string>>({length_cm:"",width_cm:"",height_cm:""});
+  const [manualPreview,setManualPreview]=useState<ManualPreview|null>(null);
+  const [wbPlaceholder,setWbPlaceholder]=useState(false);
+  const openDimensionDetail=(alert:DimensionAlert)=>{
+    setFillError("");setManualPreview(null);
+    setDimensionInputs(Object.fromEntries(dimensionKeys.map(k=>[k,alert.catalog_dimensions?.[k]==null?"":String(alert.catalog_dimensions[k])])) as Record<DimensionKey,string>);
+    setDimensionDetail(alert);
+  };
+  const parsedDimensions=()=>Object.fromEntries(dimensionKeys.map(k=>[k,Number(dimensionInputs[k].replace(",","."))])) as Record<DimensionKey,number>;
+  const dimensionsValid=dimensionKeys.every(k=>{const raw=dimensionInputs[k].trim().replace(",",".");return raw!==""&&/^\d+(?:\.\d{1,2})?$/.test(raw)&&Number(raw)>0&&Number(raw)<=99999999.99;});
+  const dimensionsChanged=!!dimensionDetail&&dimensionKeys.some(k=>dimensionInputs[k].trim()!==""&&Number(dimensionInputs[k].replace(",","."))!==dimensionDetail.catalog_dimensions?.[k]);
+  const [fillBusy,setFillBusy]=useState(false);
+  const [fillError,setFillError]=useState("");
   const [selectedMaster,setSelectedMaster]=useState<Record<number,string>>({});
-  const loadAttention=async()=>{const r=await fetch(`${API}/product-attention`);if(!r.ok)throw Error(`Не удалось получить конфликты (${r.status})`);setAlerts(await r.json());};
-  useEffect(()=>{void loadAttention().catch(()=>{});},[]);
+  const loadAttention=async()=>{const r=await fetch(`${API}/product-attention`,{cache:"no-store"});if(!r.ok)throw Error(`Не удалось получить конфликты (${r.status})`);setAlerts(await r.json());setAttentionError("");};
+  useEffect(()=>{void loadAttention().catch(e=>setAttentionError(e instanceof Error?e.message:"Ошибка загрузки конфликтов"));},[]);
   const scanAttention=async()=>{setAttentionBusy(true);setMessage("");try{
     const r=await fetch(`${API}/product-attention/scan`,{method:"POST"});if(!r.ok)throw Error(`Сверка WB не выполнена (${r.status})`);
-    const x=await r.json();setMessage(`Проверено карточек WB: ${x.scanned}; требуют внимания: ${x.attention}`);await loadAttention();
-  }catch(e){setMessage(e instanceof Error?e.message:"Ошибка сверки");}finally{setAttentionBusy(false);}};
+    const x=await r.json();setDimensionAlerts(Array.isArray(x.dimensions_attention)?x.dimensions_attention:[]);setBarcodeAlerts(Array.isArray(x.barcode_attention)?x.barcode_attention:[]);setDimensionAudit(x.dimensions_audit&&x.dimensions_audit.counts&&Array.isArray(x.dimensions_audit.excluded)?x.dimensions_audit:null);
+    setMessage(`Проверено карточек WB: ${x.scanned}; конфликты привязки: ${x.attention}; проблемы габаритов: ${(x.dimensions_attention||[]).length}; проблемы штрихкодов: ${(x.barcode_attention||[]).length}.`);await loadAttention();
+  }catch(e){setAttentionError(e instanceof Error?e.message:"Ошибка сверки");}finally{setAttentionBusy(false);}};
+  const openBarcodeDetail=(alert:BarcodeAlert)=>{
+    setBarcodeDetail(alert);setBarcodePreview(null);setBarcodeError("");
+    setBarcodeValue(alert.wb_barcodes.length===1?alert.wb_barcodes[0]:"");
+  };
+  const previewBarcode=async()=>{
+    if(!barcodeDetail||!barcodeValue)return;
+    setBarcodeBusy(true);setBarcodeError("");
+    try{
+      const data=await readResponse(await fetch(`${API}/product-attention/barcode/item/preview`,{
+        method:"POST",headers:{"Content-Type":"application/json"},
+        body:JSON.stringify({master_id:barcodeDetail.master_id,nm_id:barcodeDetail.nm_id,barcode:barcodeValue})}));
+      setBarcodePreview(data as BarcodePreview);
+    }catch(e){setBarcodeError(e instanceof Error?e.message:"Ошибка проверки штрихкода");}
+    finally{setBarcodeBusy(false);}
+  };
+  const applyBarcode=async()=>{
+    if(!barcodePreview||barcodeBusy)return;
+    if(!await requestConfirmation("Изменение штрихкода",`Изменить штрихкод только товара ${barcodePreview.article} с «${barcodePreview.catalog_barcode||"пусто"}» на «${barcodePreview.new_barcode}»? WB не изменится.`,"Сохранить штрихкод"))return;
+    setBarcodeBusy(true);setBarcodeError("");
+    try{
+      await readResponse(await fetch(`${API}/product-attention/barcode/item/apply`,{
+        method:"POST",headers:{"Content-Type":"application/json"},
+        body:JSON.stringify({master_id:barcodePreview.master_id,nm_id:barcodePreview.nm_id,barcode:barcodePreview.new_barcode,preview_fingerprint:barcodePreview.fingerprint})}));
+      setBarcodePreview(null);setBarcodeDetail(null);
+      await load();await scanAttention();
+      setMessage(`Штрихкод ${barcodePreview.article} сохранён в общем каталоге.`);
+    }catch(e){setBarcodePreview(null);setBarcodeError(e instanceof Error?e.message:"Ошибка сохранения штрихкода");}
+    finally{setBarcodeBusy(false);}
+  };
+  const previewManualDimensions=async()=>{
+    if(!dimensionDetail||!dimensionsValid||!dimensionsChanged)return;
+    setFillBusy(true);setFillError("");try{
+      const data=await readResponse(await fetch(`${API}/product-attention/dimensions/item/manual/preview`,{
+        method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({master_id:dimensionDetail.master_id,nm_id:dimensionDetail.nm_id,dimensions:parsedDimensions()})}));
+      if(data.master_id!==dimensionDetail.master_id||data.nm_id!==dimensionDetail.nm_id||!Array.isArray(data.changes)||typeof data.fingerprint!=="string")throw Error("Некорректный ответ сервера");
+      setManualPreview(data as ManualPreview);
+    }catch(e){setFillError(e instanceof Error?e.message:"Не удалось проверить размеры");}finally{setFillBusy(false);}
+  };
+  const applyManualDimensions=async()=>{
+    if(!manualPreview||!dimensionDetail||fillBusy)return;
+    if(!await requestConfirmation("Заменить габариты в каталоге",`Сохранить ${manualPreview.changes.length} изменённых полей товара ${manualPreview.article}? На WB ничего не изменится.`,"Заменить в каталоге"))return;
+    setFillBusy(true);setFillError("");try{
+      const result=await readResponse(await fetch(`${API}/product-attention/dimensions/item/manual/apply`,{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({master_id:manualPreview.master_id,nm_id:manualPreview.nm_id,preview_fingerprint:manualPreview.fingerprint,dimensions:parsedDimensions()})}));
+      setManualPreview(null);setDimensionDetail(null);await load();await scanAttention();
+      setMessage(`Изменено полей: ${result.updated_fields}. Габариты в каталоге сохранены, WB не изменён.`);
+    }catch(e){setFillError(e instanceof Error?e.message:"Не удалось сохранить габариты");setManualPreview(null);}finally{setFillBusy(false);}
+  };
   const approveAttention=async(a:AttentionItem)=>{const target=Number(selectedMaster[a.id]||products.find(p=>p.seller_article===a.article)?.id||0);
     if(!target){setMessage("Укажи товар каталога для подтверждения");return;}
-    if(!confirm(`Подтвердить связь WB nmID ${a.nm_id} с товаром ID ${target}? История не изменится.`))return;
+    if(!await requestConfirmation("Подтверждение связи WB",`Связать WB nmID ${a.nm_id} с товаром ID ${target}? История не изменится.`,"Подтвердить связь"))return;
     setAttentionBusy(true);try{const r=await fetch(`${API}/product-attention/${a.id}/approve`,{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({master_id:target,nm_id:a.nm_id,observed_article:a.article})});const x=await r.json();if(!r.ok)throw Error(typeof x.detail==="string"?x.detail:"Ошибка подтверждения");setMessage(`Подтверждено nmID ${a.nm_id}`);await loadAttention();}catch(e){setMessage(e instanceof Error?e.message:"Ошибка");}finally{setAttentionBusy(false);}};
 
 
+  const openAlerts=alerts.filter(a=>a.status==="OPEN");
+  const visibleBarcodeAlerts=barcodeAlerts.filter(a=>[a.title,a.article,a.nm_id].some(v=>String(v||"").toLowerCase().includes(attentionSearch.toLowerCase().trim())));
+  const visibleDimensionAlerts=dimensionAlerts.filter(a=>[a.title,a.article,a.nm_id].some(v=>String(v||"").toLowerCase().includes(attentionSearch.toLowerCase().trim())));
+  const visibleAlerts=openAlerts.filter(a=>[a.title,a.article,a.nm_id,a.old_article].some(v=>String(v||"").toLowerCase().includes(attentionSearch.toLowerCase().trim())));
+
   const load=async()=>{
-    const r=await fetch(`${API}/master-products`);
+    const r=await fetch(`${API}/master-products`,{cache:"no-store"});
     if(!r.ok)throw Error(`Ошибка загрузки: ${r.status}`);
     const data=await r.json();
     const normalized=(Array.isArray(data)?data:[]).map((p:Product)=>({
@@ -202,7 +433,7 @@ function MasterProducts(){
   };
   const setField=<K extends keyof Form>(key:K,value:Form[K])=>setForm(f=>({...f,[key]:value}));
   const save=async()=>{if(saving)return;setSaving(true);setMessage("");try{const r=await fetch(editing?`${API}/master-products/${editing.id}`:`${API}/master-products`,{method:editing?"PUT":"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(form)});const d=await r.json();if(!r.ok||d.status!=="ok")throw Error(d.message||"Не удалось сохранить товар");setModal(false);setMessage(editing?"Товар сохранён":"Товар добавлен");await load();}catch(e){setMessage(e instanceof Error?e.message:"Ошибка сохранения");}finally{setSaving(false);}};
-  const remove=async(p:Product)=>{if(!confirm(`Удалить «${p.name||p.seller_article}»?`))return;const r=await fetch(`${API}/master-products/${p.id}`,{method:"DELETE"});const d=await r.json();if(!r.ok||d.status!=="ok"){setMessage(d.message||"Не удалось удалить");return;}await load();};
+  const remove=async(p:Product)=>{if(!await requestConfirmation("Удаление товара",`Удалить «${p.name||p.seller_article}»? Проверь, что выбран правильный товар.`,"Удалить товар",true))return;const r=await fetch(`${API}/master-products/${p.id}`,{method:"DELETE"});const d=await r.json();if(!r.ok||d.status!=="ok"){setMessage(d.message||"Не удалось удалить");return;}await load();};
   const mps=(p:Product)=>{const a:MP[]=[];if(p.wb_enabled)a.push("WB");if(p.ozon_enabled)a.push("OZON");if(p.yandex_enabled)a.push("YANDEX");return a;};
   const dimensionsMissing=(p:Product)=>p.length_cm==null||p.width_cm==null||p.height_cm==null;
 
@@ -212,21 +443,132 @@ function MasterProducts(){
     <button className="products-primary" onClick={openAdd}>+ Добавить товар</button></div></header>
     <div className="product-attention-tabs">
       <button className={tab==="catalog"?"active":""} onClick={()=>setTab("catalog")}>Все товары</button>
-      <button className={tab==="attention"?"active":""} onClick={()=>{setTab("attention");void loadAttention().catch(()=>{});}}>Требует внимания ({alerts.filter(a=>a.status==="OPEN").length})</button>
+      <button className={tab==="attention"?"active":""} onClick={()=>{setTab("attention");void loadAttention().catch(e=>setAttentionError(e instanceof Error?e.message:"Ошибка загрузки конфликтов"));}}>Требует внимания ({alerts.filter(a=>a.status==="OPEN").length+dimensionAlerts.length+barcodeAlerts.length})</button>
     </div>
     {tab==="attention" && <section className="product-attention">
-      <p>Конфликты идентичности карточек. Ничего не меняется без подтверждения. WB связывается по nmID, остальные маркетплейсы — отдельно.</p>
-      <button className="products-primary" disabled={attentionBusy} onClick={()=>void scanAttention()}>Сверить карточки WB</button>
-      {message&&<p role="status">{message}</p>}
-      <div className="products-table-wrap"><table className="products-table"><thead><tr><th>Товар WB</th><th>nmID</th><th>Было / обнаружено</th><th>Проблема</th><th>Связать с товаром</th><th>Действие</th></tr></thead><tbody>
-      {alerts.filter(a=>a.status==="OPEN").map(a=><tr key={a.id}><td>{a.title||a.article}</td><td>{a.nm_id}</td><td>{a.old_article||"—"} → {a.article}</td><td>{a.reason}</td><td>
-      <select value={selectedMaster[a.id]||String(products.find(p=>p.seller_article===a.article)?.id||"")} onChange={e=>setSelectedMaster(m=>({...m,[a.id]:e.target.value}))}>
-        <option value="">Выбрать товар</option>
-        {products.map(p=><option key={p.id} value={p.id}>{p.seller_article} · {p.name}</option>)}
-      </select></td><td><button disabled={attentionBusy} onClick={()=>void approveAttention(a)}>Подтвердить</button></td></tr>)}
-      {!alerts.some(a=>a.status==="OPEN")&&<tr><td colSpan={6}>Нет открытых конфликтов. Нажми «Сверить карточки WB».</td></tr>}
+      <div className="product-attention-heading">
+        <div><h2>Сверка карточек Wildberries</h2><p>Конфликты связей и габаритов. Данные WB доступны только для чтения. Пустые размеры нашего каталога можно заполнить в окне проблемы конкретного товара.</p></div>
+        <div style={{display:"flex",gap:8,flexWrap:"wrap",justifyContent:"flex-end"}}><button type="button" className="products-primary" disabled={attentionBusy||fillBusy||bulkLinkBusy} onClick={()=>void previewBulkLinks()}>{bulkLinkBusy?"Подготовка…":"Сопоставить существующие товары WB"}</button><button className="products-primary product-attention-scan" disabled={attentionBusy||fillBusy} onClick={()=>void scanAttention()}>{attentionBusy?"Идёт сверка…":"Обновить сверку WB"}</button></div>
+      </div>
+      <div className="product-attention-toolbar">
+        <input aria-label="Поиск по проблемным карточкам" placeholder="Поиск по названию, артикулу или nmID" value={attentionSearch} onChange={e=>setAttentionSearch(e.target.value)}/>
+        <span>Показано: {visibleAlerts.length+visibleDimensionAlerts.length+visibleBarcodeAlerts.length} из {openAlerts.length+dimensionAlerts.length+barcodeAlerts.length}</span>
+      </div>
+      {bulkLinkError&&<div className="products-message" role="alert">{bulkLinkError}</div>}
+      {fillError&&<div className="products-message" role="alert">{fillError}</div>}
+      {attentionError&&<div className="products-message" role="alert">{attentionError}</div>}
+      {message&&<div className="products-message" role="status">{message}</div>}
+      {dimensionAudit&&<div className="products-message" role="status" style={{marginBottom:12}}>
+        <div><strong>Охват проверки габаритов WB:</strong> {dimensionAudit.counts.checked} из {dimensionAudit.counts.checked+dimensionAudit.excluded.length} карточек с nmID.
+          Совпадают: {dimensionAudit.counts.clean}; с проблемами размеров: {dimensionAudit.counts.with_issues}; не проверены из-за привязки: {dimensionAudit.excluded.length}.</div>
+        {dimensionAudit.excluded.length>0&&<>
+          <button type="button" className="product-attention-problem-link" style={{marginTop:8}}
+            onClick={()=>setShowAuditExcluded(v=>!v)}>{showAuditExcluded?"Скрыть":"Показать"} причины пропуска ({dimensionAudit.excluded.length})</button>
+          {showAuditExcluded&&<div style={{maxHeight:260,overflow:"auto",marginTop:8}}>
+            <table className="products-table" style={{width:"100%"}}><thead><tr><th>Артикул</th><th>nmID</th><th>Почему габариты не проверены</th></tr></thead><tbody>
+            {dimensionAudit.excluded.map(row=><tr key={row.nm_id}><td>{row.article||"—"}</td><td>{row.nm_id}</td><td>{({no_link:"Нет подтверждённой связи WB",no_master:"Связь указывает на отсутствующий товар каталога",no_local:"Нет локальной карточки WB",duplicate_local:"Несколько локальных карточек с одним nmID",article_mismatch:"Не совпадает артикул WB, локальной карточки или каталога"} as Record<string,string>)[row.reason]||row.reason}</td></tr>)}
+            </tbody></table>
+          </div>}
+        </>}
+      </div>}
+      <div className="products-table-wrap"><table className="products-table product-attention-table"><colgroup><col className="product-attention-col-name"/><col className="product-attention-col-id"/><col className="product-attention-col-transition"/><col className="product-attention-col-problem"/><col className="product-attention-col-link"/><col className="product-attention-col-action"/></colgroup><thead><tr><th>Товар МП</th><th>Номенклатура</th><th>Было / обнаружено</th><th>Проблема</th><th>Связать с товаром</th><th>Действие</th></tr></thead><tbody>
+      {visibleAlerts.map(a=>{
+        const catalogMatches=products.filter(p=>p.seller_article===a.article);
+        const selectedId=selectedMaster[a.id]||String(catalogMatches.length===1?catalogMatches[0].id:"");
+        const isCreate=(a.reason==="MISSING_LOCAL_CARD"||a.reason==="NO_MASTER_PRODUCT")&&catalogMatches.length===0;
+        const isLink=(a.reason==="MISSING_LOCAL_CARD"||a.reason==="NO_MASTER_PRODUCT")&&catalogMatches.length===1;
+        return <tr key={a.id}>
+          <td className="product-attention-name"><strong>{a.title||a.article}</strong><span>{a.article}</span></td>
+          <td className="product-attention-nmid" title="Wildberries: nmID">{a.nm_id}</td>
+          <td><span className="product-attention-transition"><span>{a.old_article||"—"}</span><svg viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="M4 12h15m-6-6 6 6-6 6"/></svg><span>{a.article}</span></span></td>
+          <td><div className="product-attention-problem-cell"><span className="product-attention-reason">{attentionReason(a.reason).label}</span><ProblemHint description={attentionReason(a.reason).description}/></div></td>
+          <td><select aria-label={`Связать ${a.article} с товаром`} disabled={isCreate} value={selectedId} onChange={e=>setSelectedMaster(m=>({...m,[a.id]:e.target.value}))}>
+            <option value="">{isCreate?"Сначала создайте товар":"Выбрать товар"}</option>
+            {!isCreate&&products.map(p=><option key={p.id} value={p.id}>{p.seller_article} · {p.name}</option>)}
+          </select></td>
+          <td><div className="product-attention-row-actions">{isCreate?
+            <button type="button" className="product-attention-confirm" disabled={attentionBusy||createLoading||createBusy} onClick={()=>void openCreateFromMarketplace("WB",a.nm_id,a.article)}>{createCheckingId===`WB:${a.nm_id}`?"Проверяем…":"Создать товар"}</button>
+            :isLink?<button type="button" className="product-attention-confirm" disabled={attentionBusy||createLoading||createBusy||!selectedId} onClick={()=>void approveAttention(a)}>Связать</button>
+            :<button type="button" className="product-attention-confirm" onClick={()=>setAttentionExplanation(a)}>Подробнее</button>}
+          </div></td>
+        </tr>;
+      })}
+      {visibleDimensionAlerts.map(a=><tr key={`dim-${a.nm_id}`}><td className="product-attention-name"><strong>{a.title||a.article}</strong><span>{a.article}</span></td><td className="product-attention-nmid" title="Wildberries: nmID">{a.nm_id}</td><td>Габариты упаковки</td><td><div className="product-attention-problem-cell"><button type="button" className="product-attention-problem-link" onClick={()=>openDimensionDetail(a)}>Есть проблема ({a.problems.length})</button><ProblemHint description={a.problems.some(p=>p.code==="MARKETPLACE_DIMENSION_MISSING")?"На WB не заполнены некоторые габариты. Проверьте размеры в карточке маркетплейса.":a.problems.some(p=>p.code==="DIMENSION_MISMATCH")?"Габариты каталога и WB отличаются. Откройте подробности для сравнения и решения.":"В каталоге есть пустые размеры, которые можно заполнить из WB."}/></div></td><td>{products.find(p=>p.id===a.master_id)?.seller_article?`Связан с ${products.find(p=>p.id===a.master_id)?.seller_article}`:`Связан с товаром ID ${a.master_id}`}</td><td><button type="button" className="product-attention-confirm" onClick={()=>openDimensionDetail(a)}>Подробнее</button></td></tr>)}
+      {visibleBarcodeAlerts.map(a=><tr key={`bar-${a.nm_id}`}><td className="product-attention-name"><strong>{a.title||a.article}</strong><span>{a.article}</span></td><td className="product-attention-nmid" title="Wildberries: nmID">{a.nm_id}</td><td>Штрихкод товара</td><td><div className="product-attention-problem-cell"><button type="button" className="product-attention-problem-link" onClick={()=>openBarcodeDetail(a)}>Есть проблема</button><ProblemHint description={a.problem==="MISSING_ON_WB"?"WB не передал штрихкод. Проверьте его в кабинете площадки.":a.problem==="MISSING_IN_CATALOG"?"Штрихкод отсутствует в нашем каталоге. Откройте подробности для выбора значения.":"Штрихкоды каталога и WB различаются. Нужна проверка."}/></div></td><td>{products.find(p=>p.id===a.master_id)?.seller_article?`Связан с ${products.find(p=>p.id===a.master_id)?.seller_article}`:`Связан с товаром ID ${a.master_id}`}</td><td><button type="button" className="product-attention-confirm" onClick={()=>openBarcodeDetail(a)}>Подробнее</button></td></tr>)}
+      {!visibleAlerts.length&&!visibleDimensionAlerts.length&&!visibleBarcodeAlerts.length&&<tr><td colSpan={6} className="product-attention-empty">{openAlerts.length?"По вашему запросу карточки не найдены.":"Нет открытых конфликтов. Нажмите «Обновить сверку WB» для актуальной проверки."}</td></tr>}
       </tbody></table></div>
-      <p>Подтверждение фиксирует связь nmID с товаром. Существующие продажи и снимки остатков не перезаписываются.</p>
+      <p className="product-attention-footnote">Габариты проверяются при нажатии «Обновить сверку WB». Список габаритов не сохраняется в БД и доступен до обновления страницы. Запись пустых размеров в наш каталог выполняется только после отдельного подтверждения.</p>
+      {attentionExplanation&&<div className="product-dimension-overlay" role="presentation" onMouseDown={()=>setAttentionExplanation(null)}><div className="product-dimension-dialog" role="dialog" aria-modal="true" aria-label="Описание проблемы" onMouseDown={e=>e.stopPropagation()}>
+        <div className="product-dimension-dialog-head"><div><h3>{attentionReason(attentionExplanation.reason).label}</h3><p>{attentionExplanation.article} · WB: {attentionExplanation.nm_id}</p></div><button type="button" onClick={()=>setAttentionExplanation(null)} aria-label="Закрыть">×</button></div>
+        <div className="products-message">{attentionReason(attentionExplanation.reason).description} Проверьте выбранный товар перед подтверждением связи.</div>
+        <div className="product-dimension-dialog-actions"><button type="button" className="products-primary" onClick={()=>setAttentionExplanation(null)}>Закрыть</button></div>
+      </div></div>}
+      {createError&&!createFromCard&&<div className="products-message" role="alert">{createError} <button type="button" onClick={()=>setCreateError("")}>Закрыть</button></div>}
+      {createFromCard&&<div className="product-dimension-overlay" role="presentation" onMouseDown={()=>!createBusy&&setCreateFromCard(null)}>
+        <div className="product-dimension-dialog" role="dialog" aria-modal="true" aria-label="Создание товара" onMouseDown={e=>e.stopPropagation()}>
+          <div className="product-dimension-dialog-head"><div><h3>Создать товар</h3><p>Предварительный просмотр данных из {createFromCard.marketplace==="YANDEX"?"Яндекс Маркета":createFromCard.marketplace==="OZON"?"Ozon":"Wildberries"}. Товар появится в едином каталоге.</p></div><button type="button" disabled={createBusy} onClick={()=>setCreateFromCard(null)} aria-label="Закрыть">×</button></div>
+          <p className="product-dimension-readonly">Статус нового товара — «Готовится». В реестр остатков автоматически не включается. Себестоимость — 0 ₽ до ручного заполнения. Данные на маркетплейсе не меняются.</p>
+          <div className="product-dimension-table-wrap"><table><tbody>
+            <tr><th>Название</th><td>{createFromCard.name||"Не передано маркетплейсом"}</td></tr>
+            <tr><th>Артикул</th><td>{createFromCard.article}</td></tr>
+            <tr><th>Источник / ID</th><td>{createFromCard.marketplace} · {createFromCard.external_id}</td></tr>
+            <tr><th>Штрихкод</th><td>{createFromCard.barcodes.join(", ")||"Не передан"}</td></tr>
+            <tr><th>Габариты, см</th><td>{createFromCard.dimensions?`${createFromCard.dimensions.length_cm} × ${createFromCard.dimensions.width_cm} × ${createFromCard.dimensions.height_cm}`:"Не переданы"}</td></tr>
+          </tbody></table></div>
+          {createError&&<p className="products-message" role="alert">{createError}</p>}
+          <div className="product-dimension-dialog-actions product-create-dialog-actions"><button type="button" className="product-create-cancel" disabled={createBusy} onClick={()=>setCreateFromCard(null)}>Отмена</button><button type="button" className="products-primary" disabled={createBusy} onClick={()=>void confirmCreateFromMarketplace()}>{createBusy?"Создаём…":"Подтвердить создание"}</button></div>
+        </div>
+      </div>}
+      {bulkLinkPreview&&<div className="product-dimension-overlay" role="presentation" onMouseDown={()=>!bulkLinkBusy&&setBulkLinkPreview(null)}>
+        <div className="product-dimension-dialog" role="dialog" aria-modal="true" aria-label="Сопоставление карточек WB" onMouseDown={e=>e.stopPropagation()} style={{maxWidth:980}}>
+          <div className="product-dimension-dialog-head"><div><h3>Сопоставить существующие товары WB</h3><p>Только однозначные соответствия по nmID локальной карточки и артикулу общего каталога.</p></div><button type="button" disabled={bulkLinkBusy} onClick={()=>setBulkLinkPreview(null)} aria-label="Закрыть">×</button></div>
+          <p className="product-dimension-readonly">Предварительный просмотр: возможных связей {bulkLinkPreview.proposals.length}, отклонённых неоднозначных вариантов {bulkLinkPreview.skipped.length}. Ничего не будет изменено до подтверждения. Размеры и названия не записываются.</p>
+          <div className="product-dimension-table-wrap" style={{maxHeight:"48vh",overflow:"auto"}}><table><thead><tr><th><input type="checkbox" aria-label="Выбрать все однозначные" checked={bulkLinkPreview.proposals.length>0&&bulkLinkPreview.proposals.every(p=>!!bulkLinkSelected[p.nm_id])} onChange={e=>setBulkLinkSelected(Object.fromEntries(bulkLinkPreview.proposals.map(p=>[p.nm_id,e.target.checked])))} /></th><th>Артикул / nmID</th><th>Название WB</th><th>Общий каталог</th></tr></thead><tbody>
+            {bulkLinkPreview.proposals.map(p=><tr key={p.nm_id}><td><input type="checkbox" checked={!!bulkLinkSelected[p.nm_id]} onChange={e=>setBulkLinkSelected(prev=>({...prev,[p.nm_id]:e.target.checked}))} aria-label={`Выбрать ${p.article}`}/></td><td>{p.article}<br/>{p.nm_id}</td><td>{p.wb_title||"—"}</td><td>{p.master_name||p.article} (ID {p.master_id})</td></tr>)}
+            {!bulkLinkPreview.proposals.length&&<tr><td colSpan={4}>Однозначных совпадений нет. Требуется ручное сопоставление.</td></tr>}
+          </tbody></table></div>
+          {bulkLinkPreview.skipped.length>0&&<details><summary>Не предложены для массового подтверждения: {bulkLinkPreview.skipped.length}</summary><div className="product-dimension-table-wrap" style={{maxHeight:160,overflow:"auto"}}><table><tbody>{bulkLinkPreview.skipped.map(p=><tr key={p.nm_id}><td>{p.article}</td><td>{p.nm_id}</td><td>{({dismissed:"Ранее отклонена",duplicate_or_empty_article:"Неуникальный или пустой артикул",local_missing_or_duplicate:"Нет ровно одной локальной карточки с nmID",local_article_conflict:"Артикул локальной карточки не совпадает или занят",master_missing_or_duplicate:"Нет однозначного товара каталога",master_already_linked:"Общий товар уже связан с другим nmID",imported_identity_conflict:"Импортированная связь указывает на другой товар или артикул"} as Record<string,string>)[p.reason]||p.reason}</td></tr>)}</tbody></table></div></details>}
+          <div className="product-dimension-dialog-actions" style={{display:"flex",gap:8,justifyContent:"flex-end"}}><button className="products-primary" disabled={bulkLinkBusy} onClick={()=>setBulkLinkPreview(null)}>Отмена</button><button className="products-primary" disabled={bulkLinkBusy||!bulkLinkPreview.proposals.some(p=>bulkLinkSelected[p.nm_id])} onClick={()=>void applyBulkLinks()}>Подтвердить выбранные ({bulkLinkPreview.proposals.filter(p=>bulkLinkSelected[p.nm_id]).length})</button></div>
+        </div></div>}
+      {barcodeDetail&&<div className="product-dimension-overlay" role="presentation" onMouseDown={()=>!barcodeBusy&&setBarcodeDetail(null)}><div className="product-dimension-dialog" role="dialog" aria-modal="true" aria-label="Проблемы штрихкода" onMouseDown={e=>e.stopPropagation()}>
+        <div className="product-dimension-dialog-head"><div><h3>Проверка штрихкода</h3><p>{barcodeDetail.title||barcodeDetail.article} · {barcodeDetail.article} · nmID {barcodeDetail.nm_id}</p></div><button disabled={barcodeBusy} onClick={()=>setBarcodeDetail(null)} aria-label="Закрыть">×</button></div>
+        <p className="product-dimension-readonly">Изменяется только штрихкод нашего каталога. Выберите значение, полученное с WB. Изменение штрихкода на WB через приложение пока недоступно.</p>
+        <div className="product-dimension-table-wrap"><table><thead><tr><th>Наш каталог</th><th>Wildberries</th></tr></thead><tbody><tr><td>{barcodeDetail.catalog_barcode||"Не заполнено"}</td><td>{barcodeDetail.wb_barcodes.join(", ")||"Не передано"}</td></tr></tbody></table></div>
+        {barcodeDetail.wb_barcodes.length>0&&<label style={{display:"block",marginTop:16}}>Штрихкод для каталога
+          <select style={{display:"block",width:"100%",marginTop:8,padding:10}} value={barcodeValue} onChange={e=>{setBarcodeValue(e.target.value);setBarcodePreview(null);}}>
+            <option value="">Выберите штрихкод WB</option>{barcodeDetail.wb_barcodes.map(v=><option key={v} value={v}>{v}</option>)}
+          </select></label>}
+        {barcodeError&&<div className="products-message" role="alert">{barcodeError}</div>}
+        <div className="product-dimension-dialog-actions" style={{gap:8}}><button className="products-primary" disabled={barcodeBusy} onClick={()=>setWbPlaceholder(true)}>Изменить на WB</button><button className="products-primary" disabled={barcodeBusy||!barcodeValue||barcodeValue===barcodeDetail.catalog_barcode} onClick={()=>void previewBarcode()}>Заменить в каталоге</button><button className="products-primary" disabled={barcodeBusy} onClick={()=>setBarcodeDetail(null)}>Закрыть</button></div>
+      </div></div>}
+      {barcodePreview&&<div className="product-dimension-overlay product-dimension-confirm-layer" role="presentation" onMouseDown={()=>!barcodeBusy&&setBarcodePreview(null)}><div className="product-dimension-dialog" role="dialog" aria-modal="true" aria-label="Предпросмотр штрихкода" onMouseDown={e=>e.stopPropagation()}>
+        <div className="product-dimension-dialog-head"><div><h3>Предварительная проверка штрихкода</h3><p>{barcodePreview.article} · WB nmID {barcodePreview.nm_id}. Пока без изменений.</p></div><button disabled={barcodeBusy} onClick={()=>setBarcodePreview(null)} aria-label="Закрыть">×</button></div>
+        <p className="product-dimension-readonly">Было: {barcodePreview.catalog_barcode||"Не заполнено"}. Будет: {barcodePreview.new_barcode}. Изменится только наш каталог.</p>
+        {barcodeError&&<div className="products-message" role="alert">{barcodeError}</div>}
+        <div className="product-dimension-dialog-actions" style={{gap:8}}><button className="products-primary" disabled={barcodeBusy} onClick={()=>setBarcodePreview(null)}>Отмена</button><button className="products-primary" disabled={barcodeBusy} onClick={()=>void applyBarcode()}>Подтвердить замену</button></div>
+      </div></div>}
+      {dimensionDetail&&<div className="product-dimension-overlay" role="presentation" onMouseDown={()=>!fillBusy&&setDimensionDetail(null)}><div className="product-dimension-dialog" role="dialog" aria-modal="true" aria-label="Проблемы габаритов" onMouseDown={e=>e.stopPropagation()}>
+        <div className="product-dimension-dialog-head"><div><h3>Есть проблемы с габаритами</h3><p>{dimensionDetail.title||dimensionDetail.article} · {dimensionDetail.article} · WB nmID {dimensionDetail.nm_id}</p></div><button type="button" disabled={fillBusy} onClick={()=>setDimensionDetail(null)} aria-label="Закрыть">×</button></div>
+        <p className="product-dimension-readonly">Изменяйте размеры нашего каталога в полях ниже. Размеры WB — только для чтения. Изменения в каталог сохраняются после предварительной проверки и подтверждения.</p>
+        <div className="product-dimension-table-wrap"><table><thead><tr><th>Параметр</th><th>Наш каталог, см (редактируется)</th><th>WB, см</th><th>Проблема</th></tr></thead><tbody>{dimensionKeys.map(k=>{const problem=dimensionDetail.problems.find(p=>p.field===k);return <tr key={k}><td>{dimensionLabels[k]}</td><td><input className="product-dimension-input" type="text" inputMode="decimal" aria-label={`${dimensionLabels[k]} в каталоге, см`} value={dimensionInputs[k]} onChange={e=>{setFillError("");setDimensionInputs(prev=>({...prev,[k]:e.target.value}));}} placeholder="Не заполнено"/></td><td>{dimensionDetail.marketplace_dimensions?.[k]??"Не передано"}</td><td>{!problem?"Совпадает":problem.code==="MARKETPLACE_DIMENSION_MISSING"?"Не передано на WB":problem.code==="CATALOG_DIMENSION_MISSING"?"Нет значения в каталоге":"Размеры отличаются"}</td></tr>;})}</tbody></table></div>
+        {(!dimensionsValid||!dimensionsChanged)&&<p className="product-dimension-hint">Для замены в каталоге введите три положительных размера (до 2 знаков после запятой), отличающихся от текущих.</p>}
+        {bulkLinkError&&<div className="products-message" role="alert">{bulkLinkError}</div>}
+      {fillError&&<div className="products-message" role="alert">{fillError}</div>}
+        <div className="product-dimension-dialog-actions" style={{display:"flex",gap:8,justifyContent:"flex-end",flexWrap:"wrap"}}>
+          <button type="button" className="products-primary" disabled={fillBusy} onClick={()=>setWbPlaceholder(true)}>Изменить на WB</button>
+          <button type="button" className="products-primary" disabled={fillBusy||!dimensionsValid||!dimensionsChanged} onClick={()=>void previewManualDimensions()}>{fillBusy?"Проверка…":"Заменить в каталоге"}</button>
+          <button type="button" className="products-primary" disabled={fillBusy} onClick={()=>{setFillError("");setDimensionDetail(null);}}>Закрыть</button>
+        </div>
+      </div></div>}
+      {manualPreview&&<div className="product-dimension-overlay product-dimension-confirm-layer" role="presentation" onMouseDown={()=>!fillBusy&&setManualPreview(null)}><div className="product-dimension-dialog" role="dialog" aria-modal="true" aria-label="Предпросмотр ручного изменения габаритов" onMouseDown={e=>e.stopPropagation()}>
+        <div className="product-dimension-dialog-head"><div><h3>Предварительная проверка изменений</h3><p>{manualPreview.article} · WB nmID {manualPreview.nm_id}. Изменения ещё не записаны.</p></div><button type="button" disabled={fillBusy} onClick={()=>setManualPreview(null)} aria-label="Закрыть">×</button></div>
+        <p className="product-dimension-readonly">Будут изменены только указанные поля одного товара в нашем каталоге. На WB ничего не изменится.</p>
+        <div className="product-dimension-table-wrap"><table><thead><tr><th>Поле</th><th>Было, см</th><th>Будет, см</th></tr></thead><tbody>{manualPreview.changes.map(c=><tr key={c.field}><td>{dimensionLabels[c.field as DimensionKey]}</td><td>{c.old_cm??"Не заполнено"}</td><td>{c.new_cm}</td></tr>)}</tbody></table></div>
+        {bulkLinkError&&<div className="products-message" role="alert">{bulkLinkError}</div>}
+      {fillError&&<div className="products-message" role="alert">{fillError}</div>}
+        <div className="product-dimension-dialog-actions" style={{gap:8}}><button className="products-primary" disabled={fillBusy} onClick={()=>setManualPreview(null)}>Отмена</button><button className="products-primary" disabled={fillBusy||!manualPreview.changes.length} onClick={()=>void applyManualDimensions()}>{fillBusy?"Запись…":"Подтвердить замену"}</button></div>
+      </div></div>}
+      {wbPlaceholder&&<div className="product-dimension-overlay product-dimension-confirm-layer" role="presentation" onMouseDown={()=>setWbPlaceholder(false)}><div className="product-dimension-dialog" role="dialog" aria-modal="true" aria-label="Изменение на WB" onMouseDown={e=>e.stopPropagation()}><div className="product-dimension-dialog-head"><h3>Изменение на Wildberries</h3><button onClick={()=>setWbPlaceholder(false)} aria-label="Закрыть">×</button></div><p className="product-dimension-readonly">Функция в разработке. Изменения на Wildberries пока не отправляются.</p><div className="product-dimension-dialog-actions"><button className="products-primary" onClick={()=>setWbPlaceholder(false)}>Понятно</button></div></div></div>}
     </section>}
     {tab==="catalog" && <>
     <div className="products-stats">
@@ -330,7 +672,7 @@ function MasterProducts(){
                 <td><span className="catalog-sync-mp">{c.marketplace==="YANDEX"?"Я.Маркет":c.marketplace==="OZON"?"Ozon":"WB"}</span><span className="catalog-sync-muted">{c.external_id}</span>{Object.entries(c.platform_ids).filter(([,v])=>!!v&&v!==c.external_id).map(([k,v])=><span className="catalog-sync-muted" key={k}>{k}: {v}</span>)}</td>
                 <td className="catalog-sync-article">{c.article}</td><td className="catalog-sync-name">{c.name||"—"}</td><td className="catalog-sync-muted">{c.barcodes.join(", ")||"—"}</td>
                 <td className="catalog-sync-dims">{c.dimensions?`${c.dimensions.length_cm} × ${c.dimensions.width_cm} × ${c.dimensions.height_cm}`:"—"}</td>
-                <td>{c.status==="LINKED"?<span className="catalog-sync-muted">Связано с ID {c.master_id}</span>:c.status==="CONFLICT"?<span className="catalog-sync-muted">Проверить в «Требует внимания»</span>:
+                <td>{c.status==="LINKED"?<span className="catalog-sync-muted">Связан с {products.find(p=>p.id===c.master_id)?.seller_article || `ID ${c.master_id}`}</span>:c.status==="CONFLICT"?<span className="catalog-sync-muted" title={IMPORT_CONFLICTS[c.conflict_reason||""]||"Требуется ручная проверка"}>{IMPORT_CONFLICTS[c.conflict_reason||""]||"Проверить связь вручную"}</span>:
                   <select aria-label={`Связь с общим товаром для ${c.article}`} value={importTargets[c.external_id]||""}
                     onChange={e=>setImportTargets(a=>({...a,[c.external_id]:e.target.value}))}>
                     <option value="">Создать / найти по артикулу</option>
@@ -395,6 +737,16 @@ function MasterProducts(){
           label:x==="YANDEX"?"Яндекс Маркет":x
         }))}
       /><div className="placeholder-card"><b>{card.name}</b><span>Маркетплейс: {cardMp==="YANDEX"?"Яндекс Маркет":cardMp}</span></div><button disabled>Создать карточку — скоро</button></div></div>}
+    {confirmation&&createPortal(<div className="product-confirm-overlay" onMouseDown={()=>finishConfirmation(false)}>
+      <div className="product-confirm-dialog" role="alertdialog" aria-modal="true" aria-labelledby="product-confirm-title" aria-describedby="product-confirm-description" onMouseDown={e=>e.stopPropagation()}>
+        <div className="product-confirm-head"><h3 id="product-confirm-title">{confirmation.title}</h3><button type="button" aria-label="Закрыть подтверждение" onClick={()=>finishConfirmation(false)}>×</button></div>
+        <p id="product-confirm-description">{confirmation.message}</p>
+        <div className="product-confirm-actions">
+          <button type="button" className="product-confirm-cancel" onClick={()=>finishConfirmation(false)}>Отмена</button>
+          <button type="button" className={`products-primary${confirmation.danger?" product-confirm-danger":""}`} autoFocus onClick={()=>finishConfirmation(true)}>{confirmation.confirmLabel}</button>
+        </div>
+      </div>
+    </div>,document.body)}
   </div>;
 }
 export default MasterProducts;

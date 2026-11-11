@@ -707,12 +707,29 @@
     transform: translateY(0)
   }
 }
-/* Review queue: intentionally uses existing catalog table typography. */
-.product-attention-tabs { display:flex; gap:8px; margin:14px 0; }
-.product-attention-tabs button { border:1px solid var(--border-color, #ddd); border-radius:8px; padding:9px 16px; background:transparent; cursor:pointer; }
-.product-attention-tabs button.active { font-weight:700; border-color:currentColor; }
-.product-attention { display:grid; gap:12px; }
-.product-attention select { max-width:280px; min-width:160px; padding:6px; }
+/* WB identity review: visually consistent with the main product catalog. */
+.product-attention-tabs { display:flex; gap:8px; margin:14px 0 20px; }
+.product-attention-tabs button { border:1px solid #e2e4e8; border-radius:11px; padding:10px 16px; background:#fff; color:#666d77; font:600 12px Comfortaa,sans-serif; cursor:pointer; }
+.product-attention-tabs button.active { color:#252525; border-color:#333; box-shadow:0 0 0 1px #333 inset; }
+.product-attention { display:grid; gap:14px; }
+.product-attention-heading { display:flex; justify-content:space-between; align-items:center; gap:16px; }
+.product-attention-heading h2 { margin:0 0 7px; font-size:18px; }
+.product-attention-heading p,.product-attention-footnote { margin:0; color:#797f88; font-size:12px; line-height:1.6; }
+.product-attention-scan { flex:none; }
+.product-attention-toolbar { display:flex; align-items:center; gap:12px; }
+.product-attention-toolbar input { flex:1; min-width:0; height:42px; padding:0 14px; background:white; border:1px solid #d8dbe0; border-radius:11px; color:#292929; font:12px Comfortaa,sans-serif; }
+.product-attention-toolbar span { color:#797f88; font-size:12px; white-space:nowrap; }
+.product-attention-table { min-width:1150px; }
+.product-attention-name strong { display:block; line-height:1.5; }
+.product-attention-name>span { display:block; margin-top:5px; color:#8a8f97; font-size:11px; }
+.product-attention-nmid { white-space:nowrap; font-variant-numeric:tabular-nums; }
+.product-attention-reason { display:inline-block; border:1px solid #f4dfbc; border-radius:8px; background:#fff7ea; color:#8a5c1c; padding:6px 9px; line-height:1.3; font-size:11px; font-weight:700; }
+.product-attention-description { margin-top:6px; font-size:10px; color:#777e87; line-height:1.5; max-width:300px; }
+.product-attention select { width:100%; min-width:200px; max-width:300px; height:39px; border-radius:9px; border:1px solid #d8dbe0; background:white; padding:0 9px; color:#2b2b2b; font:11px Comfortaa,sans-serif; }
+.product-attention-confirm { border:1px solid #333; border-radius:9px; background:#333; color:white; font:600 11px Comfortaa,sans-serif; padding:11px 13px; cursor:pointer; }
+.product-attention-confirm:disabled { opacity:.55; cursor:wait; }
+.product-attention-empty { text-align:center; color:#8a8f97; padding:32px 14px !important; }
+@media(max-width:750px){.product-attention-heading{align-items:stretch;flex-direction:column}.product-attention-toolbar{align-items:stretch;flex-direction:column}.product-attention-toolbar span{align-self:flex-end}}
 
 /* Unified catalog import dialog: scoped to avoid affecting other product modals. */
 .catalog-sync-overlay { padding: 22px; }
@@ -786,3 +803,74 @@
   top: auto;
   left: auto;
 }
+/* Read-only dimension audit details */
+.product-attention-problem-link{border:1px solid #efcf9f;background:#fff7e9;border-radius:8px;padding:7px 10px;color:#84541b;font:600 11px Comfortaa,sans-serif;cursor:pointer}
+.product-attention-problem-link:hover{background:#ffedd0}
+.product-dimension-overlay{position:fixed;inset:0;background:rgba(19,22,26,.48);z-index:1100;display:flex;align-items:center;justify-content:center;padding:18px}
+.product-dimension-dialog{background:#fff;border-radius:17px;max-width:930px;width:100%;max-height:90vh;overflow:auto;padding:24px;box-shadow:0 20px 50px rgba(0,0,0,.15)}
+.product-dimension-dialog-head{display:flex;justify-content:space-between;gap:16px;align-items:start}
+.product-dimension-dialog-head h3{margin:0 0 9px;font-size:19px}.product-dimension-dialog-head p{margin:0;color:#707782;font-size:12px;line-height:1.5}
+.product-dimension-dialog-head>button{border:0;background:#f2f3f5;border-radius:9px;font-size:22px;width:35px;height:35px;cursor:pointer}
+.product-dimension-readonly{padding:12px 14px;border-radius:9px;background:#f4f5f6;color:#535d69;font-size:12px;margin:20px 0}
+.product-dimension-table-wrap{overflow:auto}.product-dimension-table-wrap table{width:100%;border-collapse:collapse;text-align:left;font-size:12px}
+.product-dimension-table-wrap th,.product-dimension-table-wrap td{padding:13px 10px;border-bottom:1px solid #e5e7eb;vertical-align:top}
+.product-dimension-table-wrap td:last-child{min-width:230px;line-height:1.6}.product-dimension-table-wrap td:last-child div{color:#737983;margin-top:5px}
+.product-dimension-dialog-actions{display:flex;justify-content:flex-end;margin-top:22px}
+
+/* Unified in-app confirmation for product actions (no browser confirm()). */
+.product-confirm-overlay{position:fixed;inset:0;z-index:3000;display:flex;align-items:center;justify-content:center;padding:20px;background:rgba(19,22,26,.50)}
+.product-confirm-dialog{width:min(460px,100%);background:#fff;color:#272a30;border:1px solid #e6e8ec;border-radius:18px;padding:24px;box-shadow:0 24px 70px rgba(16,20,28,.23)}
+.product-confirm-head{display:flex;align-items:flex-start;justify-content:space-between;gap:16px}
+.product-confirm-head h3{font-size:19px;line-height:1.4;margin:0;font-weight:700}
+.product-confirm-head>button{flex-shrink:0;width:35px;height:35px;border:0;background:#f2f3f5;border-radius:9px;font-size:22px;cursor:pointer}
+.product-confirm-dialog>p{margin:16px 0 24px;color:#666e79;font-size:13px;line-height:1.75;white-space:pre-line}
+.product-confirm-actions{display:flex;justify-content:flex-end;flex-wrap:wrap;gap:10px}
+.product-confirm-actions button{min-height:42px;padding:10px 16px;border-radius:10px;cursor:pointer}
+.product-confirm-cancel{border:1px solid #dce0e6;background:#fff;color:#30343a;font:inherit}
+.product-confirm-actions .product-confirm-danger{background:#b42318;border-color:#b42318;color:#fff}
+@media(max-width:480px){.product-confirm-dialog{padding:18px}.product-confirm-actions button{flex:1}}
+
+.product-dimension-input{width:130px;max-width:100%;border:1px solid #d3d7df;border-radius:9px;padding:9px 11px;background:#fff;color:#242933;font:inherit}.product-dimension-input:focus{outline:2px solid #a9c5ed;outline-offset:1px}.product-dimension-hint{font-size:12px;color:#7a6470;margin-top:12px}.product-dimension-confirm-layer{z-index:1200}
+
+/* Catalog creation in attention rows; keeps actions readable at narrow widths. */
+.product-attention-row-actions { display:flex; align-items:center; gap:8px; flex-wrap:wrap; }
+.product-attention-create { border:1px solid #d8dce3; background:#fff; color:#222; border-radius:9px; padding:9px 12px; cursor:pointer; font:inherit; white-space:nowrap; }
+.product-attention-create:hover:not(:disabled) { background:#f5f6f8; }
+.product-attention-create:disabled { opacity:.55; cursor:not-allowed; }
+
+/* Create-product dialog: separated primary and secondary actions. */
+.product-create-dialog-actions{gap:12px;align-items:center;flex-wrap:wrap}
+.product-create-dialog-actions button{min-height:42px;padding:10px 18px;border-radius:10px;font:inherit;cursor:pointer}
+/* Compact text only in the Create Product dialog. */
+.product-create-dialog-actions button{font:600 12px/1.35 Comfortaa,sans-serif}
+.product-create-dialog-actions .product-create-cancel{background:#fff;color:#30343a;border:1px solid #dce0e6}
+.product-create-dialog-actions .product-create-cancel:hover:not(:disabled){background:#f5f6f8;border-color:#c8cdd5}
+.product-create-dialog-actions button:disabled{opacity:.55;cursor:not-allowed}
+@media(max-width:480px){.product-create-dialog-actions button{flex:1}}
+
+/* Каталог: единое действие и компактные пояснения к проблемам */
+.product-attention-problem-cell{display:inline-flex;align-items:center;gap:8px;max-width:100%}
+.product-attention-hint{display:inline-flex;position:relative;flex:none;align-items:center}
+.product-attention-hint-trigger{width:20px;height:20px;display:grid;place-items:center;border:1px solid #d5dae1;border-radius:50%;background:#fff;color:#69727d;font:700 12px Arial,sans-serif;cursor:help;padding:0}
+.product-attention-hint-trigger:hover,.product-attention-hint-trigger:focus-visible{border-color:#b78b49;color:#895a21;outline-offset:2px}
+.product-attention-hint-popup{position:absolute;z-index:90;left:calc(100% + 10px);top:50%;transform:translateY(-50%);width:280px;max-width:min(280px,70vw);padding:12px 14px;border:1px solid #e4e5e9;border-radius:11px;background:#fff;box-shadow:0 10px 30px rgba(17,24,39,.14);color:#424952;font:12px/1.6 Comfortaa,sans-serif;opacity:0;visibility:hidden;pointer-events:none;transition:opacity .12s ease;text-align:left;white-space:normal}
+.product-attention-hint:hover .product-attention-hint-popup,.product-attention-hint:focus-within .product-attention-hint-popup{visibility:visible;opacity:1}
+.product-attention-transition{display:inline-flex;align-items:center;gap:7px;white-space:nowrap}
+.product-attention-transition svg{width:19px;height:19px;stroke:#555d68;stroke-width:2.2;fill:none;stroke-linecap:round;stroke-linejoin:round;flex:none}
+.product-attention select:disabled{color:#8d949f;background:#f3f4f6;cursor:not-allowed}
+.product-attention-row-actions .product-attention-confirm{white-space:nowrap;min-width:105px}
+
+/* Patch 16: stable WB attention table while a card preview is loading. */
+.product-attention-table{table-layout:fixed;min-width:1190px}
+.product-attention-table .product-attention-col-name{width:27%}
+.product-attention-table .product-attention-col-id{width:10%}
+.product-attention-table .product-attention-col-transition{width:15%}
+.product-attention-table .product-attention-col-problem{width:20%}
+.product-attention-table .product-attention-col-link{width:18%}
+.product-attention-table .product-attention-col-action{width:10%}
+.product-attention-table tbody tr{height:69px}
+.product-attention-table td{overflow-wrap:anywhere}
+.product-attention-table td.product-attention-nmid{overflow-wrap:normal}
+.product-attention-table .product-attention-row-actions{flex-wrap:nowrap;width:100%;min-width:0}
+.product-attention-table .product-attention-confirm{box-sizing:border-box;display:inline-flex;align-items:center;justify-content:center;width:100%;min-width:0;height:34px;padding:0 6px;border-radius:9px;white-space:nowrap;font:600 11px/1.2 Comfortaa,sans-serif}
+.product-attention-table .product-attention-confirm:disabled{cursor:wait}

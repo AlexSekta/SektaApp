@@ -8,7 +8,7 @@ from backend.models.master_product import MasterProduct
 from backend.models.product import Product
 from backend.models.wb_identity import WBIdentityLink
 from backend.models.marketplace_catalog_card import MarketplaceCatalogCard
-from backend.api.marketplace_catalog_import import import_one, import_batch, ImportOne, ImportBatch
+from backend.api.marketplace_catalog_import import import_one, import_batch, create_one, ImportOne, ImportBatch
 
 class ImportTests(unittest.TestCase):
     def setUp(self):
@@ -38,6 +38,40 @@ class ImportTests(unittest.TestCase):
             second=import_one('WB',ImportOne(external_id='1840650707',article='HS218'),self.request,self.db)
             self.assertEqual(second['status'],'already_linked')
             self.assertEqual(self.db.query(MasterProduct).count(),1)
+    def test_create_one_is_marketplace_neutral_and_rejects_duplicates(self):
+        from fastapi import HTTPException
+        ozon_cards = [{'marketplace':'OZON','external_id':'5001','article':'OZ-101',
+                       'name':'Товар только Ozon','barcodes':['4600000000001'],
+                       'dimensions':None,'platform_ids':{'product_id':'5001'}}]
+        with patch('backend.api.marketplace_catalog_import.owner', return_value=None), \
+             patch('backend.api.marketplace_catalog_import.org_id', return_value=2), \
+             patch('backend.api.marketplace_catalog_import.read_marketplace', return_value=ozon_cards):
+            response=create_one('OZON',ImportOne(external_id='5001',article='OZ-101'),self.request,self.db)
+            self.assertEqual(response['status'],'created')
+            product=self.db.query(MasterProduct).one()
+            self.assertEqual((product.name,product.status,product.active),('Товар только Ozon','READY',False))
+            self.assertEqual((product.ozon_enabled,product.wb_enabled),(True,False))
+            self.assertEqual(self.db.query(MarketplaceCatalogCard).count(),1)
+            with self.assertRaises(HTTPException) as duplicate:
+                create_one('OZON',ImportOne(external_id='5001',article='OZ-101'),self.request,self.db)
+            self.assertEqual(duplicate.exception.status_code,409)
+            self.assertEqual(self.db.query(MasterProduct).count(),1)
+
+    def test_create_one_does_not_link_existing_catalog_product(self):
+        from fastapi import HTTPException
+        self.db.add(MasterProduct(organization_id=2,sort_order=1,seller_article='HS218',
+                                  internal_article='HS218',name='Оригинал',purchase_price=0,
+                                  additional_costs=0,group='Маркетплейс',status='READY',active=False))
+        self.db.commit()
+        with patch('backend.api.marketplace_catalog_import.owner',return_value=None), \
+             patch('backend.api.marketplace_catalog_import.org_id',return_value=2), \
+             patch('backend.api.marketplace_catalog_import.read_marketplace',return_value=self.card()):
+            with self.assertRaises(HTTPException) as duplicate:
+                create_one('WB',ImportOne(external_id='1840650707',article='HS218'),self.request,self.db)
+            self.assertEqual(duplicate.exception.status_code,409)
+        self.assertEqual(self.db.query(MarketplaceCatalogCard).count(),0)
+        self.assertEqual(self.db.query(MasterProduct).count(),1)
+
     def test_batch_atomicity_and_two_new_cards(self):
         rows=self.card()+[{'marketplace':'WB','external_id':'1970402141','article':'HS225',
             'name':'Спрей ROVNO','barcodes':['4610240935367'],'dimensions':None,

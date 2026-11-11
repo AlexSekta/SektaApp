@@ -18,7 +18,25 @@ def observe(db:Session, card:dict):
     collision = db.query(Product).filter(Product.marketplace=='WB',Product.seller_article==article,Product.nm_id != nm).all()
     master = db.query(MasterProduct).filter(MasterProduct.seller_article==article).all()
     approved = db.query(WBIdentityLink).filter(WBIdentityLink.nm_id==nm).first()
-    if approved and approved.current_article==article: return None
+    # A confirmed link may have been imported after an OPEN review was created.
+    # Resolve that review only when all three identities still agree. Never
+    # auto-approve an absent, duplicate, or conflicting local card.
+    if (approved and approved.current_article == article and len(local) == 1
+            and local[0].seller_article == article and not collision):
+        linked_master = db.query(MasterProduct).filter(
+            MasterProduct.id == approved.master_id,
+            MasterProduct.seller_article == article,
+        ).first()
+        if linked_master:
+            pending = db.query(WBIdentityReview).filter(WBIdentityReview.nm_id == nm).first()
+            if pending and pending.status == 'OPEN':
+                pending.status = 'APPROVED'
+                pending.master_id = approved.master_id
+                pending.reviewed_at = approved.confirmed_at or datetime.utcnow()
+                pending.observed_article = article
+                pending.stored_article = local[0].seller_article
+                pending.last_seen_at = datetime.utcnow()
+            return None
     if len(local)>1: reason='DUPLICATE_NM_ID'
     elif collision: reason='ARTICLE_COLLISION'
     elif local and local[0].seller_article!=article: reason='ARTICLE_CHANGED'

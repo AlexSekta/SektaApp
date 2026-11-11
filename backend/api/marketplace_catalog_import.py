@@ -32,23 +32,60 @@ def candidates(db, row):
 
 
 def classify(db, rows):
+    """Read-only reconciliation of the shared catalog and confirmed platform identities.
+
+    WB confirmations exist in two tables because the Attention and catalog-import
+    flows were introduced separately. A confirmed nmID takes precedence over an
+    article-only suggestion; disagreement is shown as CONFLICT, never silently
+    repaired. For Ozon/Yandex only the generic catalog identity is authoritative.
+    """
     masters = db.query(MasterProduct).all()
+    masters_by_id = {m.id: m for m in masters}
     by_article = {}
-    for m in masters:
-        by_article.setdefault(m.seller_article, []).append(m)
-    links = db.query(MarketplaceCatalogCard).all()
-    linked = {(x.marketplace, x.external_id): x for x in links}
+    for master in masters:
+        by_article.setdefault(master.seller_article, []).append(master)
+    generic_links = db.query(MarketplaceCatalogCard).all()
+    by_identity = {(x.marketplace, x.external_id): x for x in generic_links}
     by_market_article = {}
-    for x in links:
-        by_market_article.setdefault((x.marketplace, x.seller_article), set()).add(x.external_id)
+    for link in generic_links:
+        by_market_article.setdefault((link.marketplace, link.seller_article), set()).add(link.external_id)
+
+    wb_links = {str(x.nm_id): x for x in db.query(WBIdentityLink).all()} if any(
+        row['marketplace'] == 'WB' for row in rows) else {}
+    wb_by_article = {}
+    for link in wb_links.values():
+        wb_by_article.setdefault(link.current_article, set()).add(str(link.nm_id))
+
     for row in rows:
-        matches = by_article.get(row['article'], [])
-        old = linked.get((row['marketplace'], row['external_id']))
-        row['master_id'] = old.master_id if old else (matches[0].id if len(matches) == 1 else None)
-        row['status'] = ('CONFLICT' if old and old.seller_article != row['article'] else 'LINKED' if old else 'CONFLICT' if len(matches) > 1 or
-                         (row['marketplace'], row['article']) in by_market_article else
+        market, external_id, article = row['marketplace'], row['external_id'], row['article']
+        matches = by_article.get(article, [])
+        suggestion = matches[0].id if len(matches) == 1 else None
+        generic = by_identity.get((market, external_id))
+        wb = wb_links.get(external_id) if market == 'WB' else None
+        confirmed = wb or generic
+        row['suggested_master_id'] = suggestion
+        row['master_id'] = confirmed.master_id if confirmed else suggestion
+        row['conflict_reason'] = None
+
+        if wb and generic and wb.master_id != generic.master_id:
+            row['conflict_reason'] = 'IDENTITY_DISAGREEMENT'
+        elif confirmed and confirmed.master_id not in masters_by_id:
+            row['conflict_reason'] = 'CONFIRMED_MASTER_MISSING'
+        elif wb and wb.current_article != article:
+            row['conflict_reason'] = 'WB_ARTICLE_CHANGED'
+        elif generic and generic.seller_article != article:
+            row['conflict_reason'] = 'IMPORTED_ARTICLE_CHANGED'
+        elif len(matches) > 1:
+            row['conflict_reason'] = 'DUPLICATE_CATALOG_ARTICLE'
+        elif (market, article) in by_market_article and (
+            by_market_article[(market, article)] - {external_id}):
+            row['conflict_reason'] = 'ARTICLE_USED_BY_ANOTHER_CARD'
+        elif market == 'WB' and wb_by_article.get(article, set()) - {external_id}:
+            row['conflict_reason'] = 'WB_ARTICLE_USED_BY_ANOTHER_CARD'
+
+        row['status'] = ('CONFLICT' if row['conflict_reason'] else
+                         'LINKED' if confirmed else
                          'MATCH' if len(matches) == 1 else 'NEW')
-        row['suggested_master_id'] = matches[0].id if len(matches) == 1 else None
     return rows
 
 
@@ -79,6 +116,17 @@ def _apply_verified(db: Session, marketplace: str, payload: ImportOne, row: dict
         MarketplaceCatalogCard.marketplace == marketplace,
         MarketplaceCatalogCard.external_id == payload.external_id
     ).with_for_update().first()
+    # WB identity may have been confirmed via the Attention workflow rather
+    # than catalog-import. Never create a second, conflicting identity here.
+    wb_confirmed = (db.query(WBIdentityLink).filter(
+        WBIdentityLink.nm_id == payload.external_id).first()
+        if marketplace == 'WB' else None)
+    if wb_confirmed:
+        if (wb_confirmed.current_article != row['article'] or
+                (payload.master_id is not None and payload.master_id != wb_confirmed.master_id) or
+                (current_link is not None and current_link.master_id != wb_confirmed.master_id)):
+            raise HTTPException(409, 'WB identity differs from confirmed link; review manually')
+        return {'status': 'already_linked', 'master_id': wb_confirmed.master_id}
     if current_link:
         if payload.master_id and current_link.master_id != payload.master_id:
             raise HTTPException(409, 'Card already linked to another product')
@@ -176,6 +224,57 @@ def import_one(marketplace: str, payload: ImportOne, request: Request, db: Sessi
     except IntegrityError as exc:
         db.rollback()
         raise HTTPException(409, 'Catalog key conflict; no changes saved') from exc
+    except Exception:
+        db.rollback()
+        raise
+
+
+@router.post('/{marketplace}/create-one')
+def create_one(marketplace: str, payload: ImportOne, request: Request, db: Session = Depends(get_db)):
+    """Create a new master from a verified card, regardless of source marketplace.
+
+    Unlike import-one, never attach an existing master implicitly. The caller
+    requested creation, so a concurrent/newly-existing master is a conflict.
+    """
+    owner(request)
+    marketplace = marketplace.upper()
+    if marketplace not in MARKETS:
+        raise HTTPException(422, 'Unknown marketplace')
+    if payload.master_id is not None:
+        raise HTTPException(422, 'Creating a product must not specify an existing master_id')
+    try:
+        observed = [row for row in read_marketplace(db, marketplace)
+                    if row['external_id'] == payload.external_id]
+    except Exception as exc:
+        log.exception('CATALOG_CREATE_VERIFY_FAILED market=%s', marketplace)
+        raise HTTPException(502, 'Не удалось проверить карточку маркетплейса') from exc
+    if len(observed) != 1 or observed[0]['article'] != payload.article or not payload.article.strip():
+        raise HTTPException(409, 'Карточка изменилась; обновите предварительный просмотр')
+    row = observed[0]
+    oid = org_id(db)
+    try:
+        # Lock existing catalog rows to minimize concurrent creation conflicts;
+        # the tenant-article unique constraint remains the final guard.
+        db.query(MasterProduct).filter(MasterProduct.organization_id == oid).with_for_update().all()
+        if candidates(db, row):
+            raise HTTPException(409, 'Товар с таким артикулом уже есть в каталоге. Используйте сопоставление.')
+        old = db.query(MarketplaceCatalogCard).filter(
+            MarketplaceCatalogCard.marketplace == marketplace,
+            MarketplaceCatalogCard.external_id == payload.external_id).first()
+        if old:
+            raise HTTPException(409, 'Карточка уже связана с товаром')
+        if marketplace == 'WB' and db.query(WBIdentityLink).filter(
+                WBIdentityLink.nm_id == payload.external_id).first():
+            raise HTTPException(409, 'Карточка WB уже связана с товаром')
+        result = _apply_verified(db, marketplace, payload, row, oid)
+        if result.get('status') != 'imported':
+            raise HTTPException(409, 'Карточка уже импортирована')
+        db.commit()
+        return {'status': 'created', 'master_id': result['master_id'],
+                'marketplace': marketplace, 'external_id': payload.external_id}
+    except IntegrityError as exc:
+        db.rollback()
+        raise HTTPException(409, 'Товар уже создан или возник конфликт артикула') from exc
     except Exception:
         db.rollback()
         raise
