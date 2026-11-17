@@ -63,3 +63,12 @@
 .unified-current-point.all{fill:#30343b;stroke:#fff}
 .unified-previous-line.all{stroke:#30343b;fill:none}
 .unified-legend-line.all::before,.unified-legend-line.all::after{border-color:#30343b}
+
+/* Patch 34 (UI): smooth lines; fixed-size points only on hover; neutral selected filters. */
+.unified-current-line{stroke-width:2.6;stroke-linecap:round;stroke-linejoin:round}
+.unified-previous-line{stroke-width:1.5;stroke-dasharray:none;opacity:.65;stroke-linecap:round;stroke-linejoin:round}
+.unified-active-points{position:absolute;top:8px;left:6px;right:6px;height:208px;pointer-events:none;z-index:2}
+.unified-active-point{position:absolute;width:9px;height:9px;box-sizing:border-box;border-radius:50%;transform:translate(-50%,-50%);background:#30343b;border:1.5px solid #fff;box-shadow:0 0 0 1px rgba(0,0,0,.22)}
+.unified-active-point.wb{background:#3d3d3d}.unified-active-point.ozon{background:#808080}.unified-active-point.yandex{background:#b8b8b8}
+.unified-sales-markets button.active,.unified-sales-markets .unified-previous-toggle.active{background:#323232;border-color:#323232;color:#fff}
+.unified-legend-line::after{border-top-style:solid;opacity:.55;border-top-width:1.5px}

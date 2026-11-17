@@ -17,6 +17,33 @@ const shortDate = (s: string) => new Date(`${s}T12:00:00`).toLocaleDateString("r
 function dateAdd(d: Date, days: number) { const n = new Date(d); n.setDate(n.getDate() + days); return n; }
 function monthDays(y: number, m: number) { return new Date(y, m + 1, 0).getDate(); }
 
+// Shape-preserving cubic Hermite interpolation: passes through every data point
+// without overshooting a local high/low. Separate runs never bridge missing days.
+function smoothPath(points: { x: number; y: number }[]): string {
+  if (!points.length) return "";
+  const coords = (x: number, y: number) => `${x.toFixed(3)} ${y.toFixed(3)}`;
+  if (points.length === 1) return `M${coords(points[0].x, points[0].y)}`;
+  const slopes = points.slice(1).map((p, i) => (p.y - points[i].y) / (p.x - points[i].x));
+  const tangents = points.map((_, i) => {
+    if (i === 0) return slopes[0];
+    if (i === points.length - 1) return slopes[slopes.length - 1];
+    const a = slopes[i - 1], b = slopes[i];
+    if (a * b <= 0) return 0;
+    // Weighted harmonic mean for nearly uniform and non-uniform x spacing.
+    const left = points[i].x - points[i - 1].x;
+    const right = points[i + 1].x - points[i].x;
+    const w1 = 2 * right + left, w2 = right + 2 * left;
+    return (w1 + w2) / (w1 / a + w2 / b);
+  });
+  let path = `M${coords(points[0].x, points[0].y)}`;
+  for (let i = 0; i < points.length - 1; i++) {
+    const a = points[i], b = points[i + 1], step = (b.x - a.x) / 3;
+    path += ` C${coords(a.x + step, a.y + tangents[i] * step)} ${coords(b.x - step, b.y - tangents[i + 1] * step)} ${coords(b.x, b.y)}`;
+  }
+  return path;
+}
+
+
 export default function UnifiedSales() {
   const [from, setFrom] = useState(dateString(first));
   const [to, setTo] = useState(dateString(current));
@@ -237,7 +264,6 @@ export default function UnifiedSales() {
     return byMarket;
   }, [from, to, aggregated, priorData, priorEstimate, priceMode]);
   const graphHeight = 208;
-  const interpolate = (points: { x: number; y: number }[]) => points.map((p,i) => `${i ? "L" : "M"}${p.x.toFixed(3)} ${p.y.toFixed(3)}`).join(" ");
   const selectedMarkets = MARKETS.filter(m => available.includes(m.id) && enabled.includes(m.id) && !!data[m.id]);
   // В режиме «Все» строим одну серию из суммы доступных площадок.
   // Если у одной из площадок нет данных, разрываем линию, а не рисуем неполную сумму.
@@ -268,7 +294,7 @@ export default function UnifiedSales() {
     let run: { x: number; y: number }[] = [];
     series.values.forEach((value, i) => {
       if (value === null) {
-        if (run.length > 1) segments.push(interpolate(run));
+        if (run.length > 1) segments.push(smoothPath(run));
         run = [];
         return;
       }
@@ -278,7 +304,7 @@ export default function UnifiedSales() {
       run.push({ x: point.x, y: point.y });
       points.push(point);
     });
-    if (run.length > 1) segments.push(interpolate(run));
+    if (run.length > 1) segments.push(smoothPath(run));
     return { id: series.id, paths: segments, points };
   });
   const priorLines = previousSeries.map(series => {
@@ -286,13 +312,13 @@ export default function UnifiedSales() {
     let run: { x: number; y: number }[] = [];
     series.values.forEach((value, i) => {
       if (value === null) {
-        if (run.length > 1) segments.push(interpolate(run));
+        if (run.length > 1) segments.push(smoothPath(run));
         run = [];
         return;
       }
       run.push({ x: (i + .5) / series.values.length * 1000, y: graphHeight - value / graphCeiling * graphHeight });
     });
-    if (run.length > 1) segments.push(interpolate(run));
+    if (run.length > 1) segments.push(smoothPath(run));
     return { id: series.id, paths: segments };
   });
   const selected = MARKETS.filter(m => available.includes(m.id) && enabled.includes(m.id) && !!data[m.id]);
@@ -346,9 +372,14 @@ export default function UnifiedSales() {
         <div className="unified-sales-scroll"><div className="unified-sales-chart" style={{ minWidth: `${Math.max(620, aggregated.length * (group === "day" ? 27 : 74))}px` }}>
           <svg className="unified-sales-lines" viewBox={`0 0 1000 ${graphHeight}`} preserveAspectRatio="none" aria-hidden="true">
             {currentLines.flatMap(line => line.paths.map((path, i) => <path key={`current-${line.id}-${i}`} className={`unified-current-line ${line.id}`} d={path}/>))}
-            {currentLines.flatMap(line => line.points.map(point => <circle key={`point-${line.id}-${point.key}`} className={`unified-current-point ${line.id}`} cx={point.x} cy={point.y} r={tooltip?.key === point.key ? "3.7" : "2.3"}/>))}
             {showPrevious && priorLines.flatMap(line => line.paths.map((path, i) => <path key={`previous-${line.id}-${i}`} d={path} className={`unified-previous-line ${line.id}`} />))}
           </svg>
+          {tooltip && <div className="unified-active-points" aria-hidden="true">
+            {currentLines.flatMap(line => line.points.filter(point => point.key === tooltip.key).map(point =>
+              <span key={`point-${line.id}-${point.key}`} className={`unified-active-point ${line.id}`}
+                style={{ left: `${point.x / 10}%`, top: `${point.y / graphHeight * 100}%` }}/>
+            ))}
+          </div>}
           <div className="unified-sales-bars">
             {aggregated.map(period => <div className="unified-sales-column" key={period.key}
               onMouseMove={e => { const x = Math.min(e.clientX + 16, window.innerWidth - 255); const y = Math.min(e.clientY + 14, window.innerHeight - 165); setTooltip({ key: period.key, x, y }); }}
@@ -362,7 +393,7 @@ export default function UnifiedSales() {
           {allSelected
             ? <div className="unified-prior-legend-item"><span className="unified-legend-line all"/><span>Все маркетплейсы</span></div>
             : selected.map(m => <div key={m.id} className="unified-prior-legend-item"><span className={`unified-legend-line ${m.id}`}/><span>{m.title}</span></div>)}
-          <small>{showPrevious ? "Сплошная линия — текущий период, пунктир — предыдущий период той же длины. При неполных данных линия прерывается." : "Сплошная линия — выбранный период."}</small>
+          <small>{showPrevious ? "Толстая линия — текущий период, тонкая — предыдущий период той же длины. При неполных данных линия прерывается." : "Сплошная линия — выбранный период."}</small>
         </div>
       </div>
       <p className="unified-sales-footnote">График показывает сумму заказов по выбранным площадкам; это не фактическая прибыль и не сумма выплат. Отсутствующие дни не добавляются к итогам. В режиме реализации количество товаров для Ozon берётся из аналитики заказов только за дни, для которых доступна оценка.</p>

@@ -24,16 +24,41 @@ function action(e:Event){
  }
  return "выполнил действие ("+a+")";
 }
+// The invitation URL must point to an address reachable by the invited employee.
+// Store only the PUBLIC ORIGIN here, never the invitation token.
+function invitationOriginKey(organizationId: number) {
+ return `sekta_invitation_origin_${organizationId}`;
+}
+function getInvitationOrigin(organizationId?: number): string {
+ if (!organizationId) return window.location.origin;
+ try { return window.localStorage.getItem(invitationOriginKey(organizationId)) || window.location.origin; }
+ catch { return window.location.origin; }
+}
+function normalizedInvitationOrigin(value: string): string {
+ const text = value.trim();
+ const url = new URL(text);
+ if (!['http:', 'https:'].includes(url.protocol) || !url.hostname || url.username || url.password || url.search || url.hash || url.pathname !== '/') {
+  throw new Error('Укажи адрес сайта вида http://192.168.1.82:8080 без пути, логина и параметров.');
+ }
+ if (['127.0.0.1', 'localhost', '::1', '[::1]'].includes(url.hostname.toLowerCase())) {
+  throw new Error('Локальный адрес 127.0.0.1 не подходит сотрудникам. Укажи адрес компьютера в сети.');
+ }
+ return url.origin;
+}
 export default function TeamSettings(){
  const {user}=useAuth();
  const [members,setMembers]=useState<Member[]>([]),[invites,setInvites]=useState<Invite[]>([]),[events,setEvents]=useState<Event[]>([]);
  const [email,setEmail]=useState(""),[link,setLink]=useState(""),[error,setError]=useState(""),[busy,setBusy]=useState(false),[auditOpen,setAuditOpen]=useState(false),[auditBusy,setAuditBusy]=useState(false);
+ const [invitationOrigin,setInvitationOrigin]=useState(() => getInvitationOrigin(user?.organization_id));
+ const [originNotice,setOriginNotice]=useState("");
+ useEffect(() => {setInvitationOrigin(getInvitationOrigin(user?.organization_id));setLink("");setOriginNotice("");},[user?.organization_id]);
+ function saveInvitationOrigin(){try{const origin=normalizedInvitationOrigin(invitationOrigin);if(!user?.organization_id)throw new Error("Организация не определена");window.localStorage.setItem(invitationOriginKey(user.organization_id), origin);setInvitationOrigin(origin);setOriginNotice("Адрес для приглашений сохранён в этом браузере.");setError("");}catch(e){setError(e instanceof Error?e.message:"Неверный адрес");setOriginNotice("");}}
  async function call(path:string,opts?:RequestInit){const r=await fetch(`${API}${path}`,{credentials:"include",...opts});const d=await r.json().catch(()=>({}));if(!r.ok)throw Error(d.detail||d.message||"Ошибка запроса");return d;}
  async function reload(){try{const d=await call("/team");setMembers(d.members);setInvites(d.invitations)}catch(e){setError(e instanceof Error?e.message:"Ошибка получения данных")}}
  async function loadAudit(){setAuditBusy(true);try{const d=await call("/team/audit?limit=100");setEvents(d.events)}catch(e){setError(e instanceof Error?e.message:"Ошибка журнала")}finally{setAuditBusy(false)}}
  useEffect(()=>{void reload();const timer=window.setInterval(()=>{void reload()},60000);return ()=>window.clearInterval(timer)},[user?.id]);
  useEffect(()=>{if(!auditOpen)return;void loadAudit();const key=(e:KeyboardEvent)=>{if(e.key==="Escape")setAuditOpen(false)};window.addEventListener("keydown",key);return ()=>window.removeEventListener("keydown",key)},[auditOpen]);
- async function invite(){setBusy(true);setError("");setLink("");try{const d=await call("/team/invitations",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({email})});setLink(`${window.location.origin}/register?invite=${encodeURIComponent(d.token)}`);setEmail("");await reload()}catch(e){setError(e instanceof Error?e.message:"Ошибка")}finally{setBusy(false)}}
+ async function invite(){setBusy(true);setError("");setLink("");try{const origin=normalizedInvitationOrigin(invitationOrigin);const d=await call("/team/invitations",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({email})});setLink(`${origin}/register?invite=${encodeURIComponent(d.token)}`);setEmail("");await reload()}catch(e){setError(e instanceof Error?e.message:"Ошибка")}finally{setBusy(false)}}
  async function revoke(id:number){if(!window.confirm("Отозвать это приглашение? Ссылка перестанет работать."))return;setError("");try{await call(`/team/invitations/${id}`,{method:"DELETE"});await reload()}catch(e){setError(e instanceof Error?e.message:"Ошибка")}}
  async function deactivate(m:Member){if(!window.confirm(`Отключить доступ сотруднику ${m.name}? Его текущие сессии будут завершены, история действий сохранится.`))return;setError("");try{await call(`/team/members/${m.id}/deactivate`,{method:"POST"});await reload()}catch(e){setError(e instanceof Error?e.message:"Ошибка")}}
  return <div className="team-root">
@@ -42,7 +67,7 @@ export default function TeamSettings(){
   <section className="team-panel"><div className="team-panel-title"><div><h3>Участники</h3><p>Пользователи вашей организации и их текущий доступ.</p></div><span className="team-counter">{members.filter(m=>m.is_active).length} активных</span></div>
    <div className="team-list">{members.map(m=><div className="team-item" key={m.id}><div className="team-avatar">{m.name.trim().charAt(0).toUpperCase()}</div><div className="team-item-main"><strong>{m.name}</strong><span>{m.email}</span><small>{m.role==="OWNER"?"Владелец":"Сотрудник"} · {m.is_active?(m.online?"Активен в последние 5 минут":`Последняя активность: ${date(m.last_seen_at)}`):"Доступ отключён"}</small></div><div className="team-item-actions"><span className={`team-pill ${!m.is_active?"off":m.online?"online":""}`}>{!m.is_active?"Отключён":m.online?"Недавно в сети":"Не в сети"}</span>{user?.role==="OWNER"&&m.role!=="OWNER"&&m.is_active&&<button type="button" className="team-btn team-danger" onClick={()=>void deactivate(m)}>Отключить</button>}</div></div>)}</div>
   </section>
-  {user?.role==="OWNER"&&<><section className="team-panel"><div className="team-panel-title"><div><h3>Пригласить сотрудника</h3><p>Приглашение действует 7 дней и привязано к email. Отправьте ссылку адресату безопасным способом.</p></div></div><div className="team-invite-form"><input type="email" aria-label="Email сотрудника" value={email} onChange={e=>setEmail(e.target.value)} placeholder="Email сотрудника"/><button className="team-btn team-primary" type="button" onClick={()=>void invite()} disabled={busy||!email.trim()}>{busy?"Создаём…":"Создать ссылку"}</button></div>{link&&<div className="team-link"><strong>Персональная ссылка (показывается один раз)</strong><div className="team-link-row"><input readOnly value={link} aria-label="Ссылка приглашения"/><button className="team-btn team-secondary" onClick={()=>void navigator.clipboard.writeText(link)}>Копировать</button></div></div>}</section>
+  {user?.role==="OWNER"&&<><section className="team-panel"><div className="team-panel-title"><div><h3>Пригласить сотрудника</h3><p>Приглашение действует 7 дней и привязано к email. Отправьте ссылку адресату безопасным способом.</p></div></div><div className="team-origin-config"><label htmlFor="sekta-invitation-origin">Адрес SektaApp для сотрудников</label><div className="team-origin-row"><input id="sekta-invitation-origin" type="url" value={invitationOrigin} placeholder="http://192.168.1.82:8080" onChange={e=>{setInvitationOrigin(e.target.value);setOriginNotice("");}}/><button type="button" className="team-btn team-secondary" onClick={saveInvitationOrigin}>Сохранить адрес</button></div><small>Например, http://192.168.1.82:8080. Сохраняется для этой организации в данном браузере. Сотрудник должен находиться в той же сети. HTTP не шифрует пароли и сессии.</small>{originNotice&&<small role="status" className="team-origin-success">{originNotice}</small>}</div><div className="team-invite-form"><input type="email" aria-label="Email сотрудника" value={email} onChange={e=>setEmail(e.target.value)} placeholder="Email сотрудника"/><button className="team-btn team-primary" type="button" onClick={()=>void invite()} disabled={busy||!email.trim()}>{busy?"Создаём…":"Создать ссылку"}</button></div>{link&&<div className="team-link"><strong>Персональная ссылка (показывается один раз)</strong><div className="team-link-row"><input readOnly value={link} aria-label="Ссылка приглашения"/><button className="team-btn team-secondary" onClick={()=>void navigator.clipboard.writeText(link)}>Копировать</button></div></div>}</section>
   <section className="team-panel"><div className="team-panel-title"><div><h3>Приглашения</h3><p>Отозвать можно только ещё не использованную ссылку.</p></div></div><div className="team-list">{invites.length===0?<p className="team-empty">Приглашений пока нет</p>:invites.map(i=><div className="team-item" key={i.id}><div className="team-item-main"><strong>{i.email}</strong><small>Действует до {date(i.expires_at)}</small></div><div className="team-item-actions"><span className="team-pill">{statuses[i.status]||i.status}</span>{i.status==="pending"&&<button type="button" className="team-btn team-danger" onClick={()=>void revoke(i.id)}>Отозвать</button>}</div></div>)}</div></section></>}
   {auditOpen&&<div className="team-overlay" onMouseDown={e=>{if(e.target===e.currentTarget)setAuditOpen(false)}}><div className="team-modal" role="dialog" aria-modal="true" aria-label="Журнал действий"><div className="team-modal-header"><div><h3>Журнал действий</h3><p>Последние 100 событий · указано время и имя сотрудника</p></div><button type="button" className="team-btn team-secondary" onClick={()=>setAuditOpen(false)}>Закрыть</button></div><div className="team-modal-body">{auditBusy?<p>Загрузка…</p>:events.length===0?<p>Записей нет</p>:events.map(e=><div key={e.id} className="team-event"><div><strong>{e.user_name||`Пользователь #${e.user_id??"—"}`}</strong> {action(e)}{e.status_code!==null&&e.status_code>=400&&<span className="team-event-error"> · ошибка {e.status_code}</span>}</div><small>{date(e.created_at)}</small></div>)}</div><div className="team-modal-footer"><small>Журнал фиксирует изменяющие запросы. Просмотры страниц не учитываются.</small><button className="team-btn team-secondary" onClick={()=>void loadAudit()}>Обновить</button></div></div></div>}
  </div>;

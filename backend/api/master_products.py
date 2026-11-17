@@ -65,6 +65,7 @@ def _serialize_product(item: MasterProduct) -> dict:
         "seller_article": item.seller_article,
         "barcode": item.barcode,
         "name": item.name,
+        "internal_name": item.internal_name,
         "group": item.group,
         "purchase_price": float(purchase),
         "additional_costs": float(extra),
@@ -248,6 +249,7 @@ def create_master_product(data: dict, db: Session = Depends(get_db)):
         seller_article=seller_article,
         barcode=barcode,
         name=name,
+        internal_name=str(data.get("internal_name") or "").strip() or None,
         group=group,
         purchase_price=purchase_price,
         additional_costs=additional_costs,
@@ -369,6 +371,8 @@ def update_master_product(
         product.internal_article = new_internal
         product.seller_article = new_seller
         product.name = new_name
+        if "internal_name" in data:
+            product.internal_name = str(data.get("internal_name") or "").strip() or None
         product.barcode = str(data.get("barcode") or "").strip() or None
         product.group = str(
             data.get("group") or product.group or "Маркетплейс"
@@ -427,3 +431,109 @@ def delete_master_product(
         raise
 
     return {"status": "ok"}
+
+
+@router.get('/master-products/marketplace-dimension-issues')
+def get_master_product_marketplace_dimension_issues(db: Session = Depends(get_db)):
+    """Current snapshot conflicts for explicitly confirmed external identities only."""
+    from backend.services.catalog_dimension_issues_25 import list_snapshot_attention
+    from fastapi import HTTPException
+    products = db.query(MasterProduct).all()
+    org_ids = {p.organization_id for p in products}
+    if len(org_ids) > 1:
+        raise HTTPException(status_code=403, detail='Ошибка разграничения организаций')
+    if not org_ids:
+        return {'issues': []}
+    return {'issues': list_snapshot_attention(db, next(iter(org_ids)))}
+
+
+@router.get('/master-products/marketplace-overview')
+def get_master_products_marketplace_overview(db: Session = Depends(get_db)):
+    """Bulk read-only summary. Never treat article-only match as confirmed identity."""
+    from backend.models.marketplace_product_snapshot import MarketplaceProductSnapshot
+    from backend.models.marketplace_catalog_card import MarketplaceCatalogCard
+    from backend.models.wb_identity import WBIdentityLink
+    from fastapi import HTTPException
+    import json
+
+    # Tenant scope is enforced by the request DB role/RLS. Also filter every query.
+    products = db.query(MasterProduct).all()
+    org_ids = {p.organization_id for p in products}
+    if len(org_ids) > 1:
+        raise HTTPException(status_code=403, detail='Ошибка разграничения организаций')
+    if not org_ids:
+        return {'cards_by_product': {}}
+    oid = next(iter(org_ids))
+    confirmed = {}
+    for c in db.query(MarketplaceCatalogCard).filter_by(organization_id=oid).all():
+        if c.master_id:
+            confirmed[(c.marketplace.upper(), str(c.external_id))] = c.master_id
+    for c in db.query(WBIdentityLink).filter_by(organization_id=oid).all():
+        confirmed[('WB',str(c.nm_id))] = c.master_id
+    result = {}
+    for snap in db.query(MarketplaceProductSnapshot).filter_by(organization_id=oid).all():
+        master_id=confirmed.get((snap.marketplace.upper(), str(snap.external_id)))
+        if master_id is None:
+            continue
+        result.setdefault(str(master_id), []).append({
+            'marketplace':snap.marketplace.upper(), 'external_id':snap.external_id,
+            'confirmed':True, 'title':snap.title, 'seller_article':snap.seller_article,
+            'dimensions':{'normalized_cm':[float(v) if v is not None else None for v in (snap.length_cm,snap.width_cm,snap.height_cm)],
+                          'state':snap.dimension_state},
+        })
+    return {'cards_by_product':result}
+
+
+@router.get('/master-products/{product_id}/marketplace-details')
+def get_master_product_marketplace_details(product_id: int, db: Session = Depends(get_db)):
+    """Read-only overview. Confirmed identities and proposed article matches are distinct."""
+    from fastapi import HTTPException
+    from backend.models.marketplace_product_snapshot import MarketplaceProductSnapshot
+    from backend.models.marketplace_catalog_card import MarketplaceCatalogCard
+    from backend.models.wb_identity import WBIdentityLink
+    import json
+
+    product = db.query(MasterProduct).filter(MasterProduct.id == product_id).first()
+    if not product:
+        raise HTTPException(status_code=404, detail='Товар не найден')
+    oid = product.organization_id
+    confirmed = {
+        (c.marketplace.upper(), c.external_id)
+        for c in db.query(MarketplaceCatalogCard).filter_by(organization_id=oid, master_id=product_id).all()
+    }
+    confirmed.update(
+        ('WB', c.nm_id)
+        for c in db.query(WBIdentityLink).filter_by(organization_id=oid, master_id=product_id).all()
+    )
+    # Unconfirmed same-article candidates are shown for review, not attached to master.
+    snapshots = db.query(MarketplaceProductSnapshot).filter(
+        MarketplaceProductSnapshot.organization_id == oid
+    ).all()
+    cards = []
+    for snap in snapshots:
+        identity = (snap.marketplace, snap.external_id)
+        is_confirmed = identity in confirmed
+        if not is_confirmed and snap.seller_article != product.seller_article:
+            continue
+        cards.append({
+            'marketplace': snap.marketplace,
+            'external_id': snap.external_id,
+            'confirmed': is_confirmed,
+            'seller_article': snap.seller_article,
+            'title': snap.title,
+            'description': snap.description,
+            'barcodes': json.loads(snap.barcodes_json or '[]'),
+            'platform_ids': json.loads(snap.platform_ids_json or '{}'),
+            'dimensions': {
+                'length': float(snap.length_raw) if snap.length_raw is not None else None,
+                'width': float(snap.width_raw) if snap.width_raw is not None else None,
+                'height': float(snap.height_raw) if snap.height_raw is not None else None,
+                'unit': snap.dimension_unit,
+                'normalized_cm': [float(x) if x is not None else None for x in (snap.length_cm,snap.width_cm,snap.height_cm)],
+                'state': snap.dimension_state,
+            },
+            'checked_at': snap.checked_at.isoformat() if snap.checked_at else None,
+        })
+    cards.sort(key=lambda x: (not x['confirmed'], x['marketplace'], x['external_id']))
+    return {'product': _serialize_product(product), 'marketplace_cards': cards,
+            'note': 'Unconfirmed article matches are candidates, not linked identities.'}

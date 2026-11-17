@@ -3,6 +3,7 @@
 Manually launched via backend.scripts.ozon_finance_sync_56 until verified in production.
 """
 import json
+from contextlib import contextmanager
 import logging
 import time
 from datetime import date, timedelta
@@ -14,6 +15,7 @@ from backend.database import SessionLocal
 from backend.auth.tenant import (set_app_db_role, set_tenant_context,
                                  clear_tenant_context, reset_app_db_role)
 from backend.services.marketplace_clients import get_ozon_client
+from backend.services.advisory_lock_connection_58_18 import lock_connection
 
 log = logging.getLogger('ozon_finance_56')
 PATH = '/v1/finance/accrual/by-day'
@@ -52,7 +54,39 @@ def parse_amount(row):
     return amount, str(money.get('currency') or '')[:8]
 
 
+# This lock is also acquired by the manual loader. Unlike the scheduler-wide
+# lock, it prevents a manual and background sync from changing the same day.
+# 63-bit positive key, including organization and day, distinct from scheduler key.
+_DAY_LOCK_NAMESPACE = 0x12A0000000000000
+
+
+@contextmanager
+def _day_lock(org, day):
+    if int(org) < 1 or int(org) >= 2**31:
+        raise ValueError('Invalid organization identifier for finance day lock')
+    key = _DAY_LOCK_NAMESPACE + (int(org) << 27) + int(day.strftime('%Y%m%d'))
+    with lock_connection() as conn:
+        acquired = conn.execute(text('SELECT pg_try_advisory_lock(:k)'), {'k': key}).scalar()
+        conn.commit()
+        if not acquired:
+            yield False
+            return
+        try:
+            yield True
+        finally:
+            conn.execute(text('SELECT pg_advisory_unlock(:k)'), {'k': key})
+            conn.commit()
+
+
 def sync_day(org, day, max_pages=100, delay=2, refresh=False):
+    """Single day with a cross-process lock; returns busy if another loader owns it."""
+    with _day_lock(org, day) as acquired:
+        if not acquired:
+            return {'day':str(day), 'status':'busy', 'rows':None}
+        return _sync_day_locked(org, day, max_pages=max_pages, delay=delay, refresh=refresh)
+
+
+def _sync_day_locked(org, day, max_pages=100, delay=2, refresh=False):
     """One date; commits each page atomically with last_id. Idempotent by accrual_id."""
     db = open_context(org)
     try:
@@ -123,6 +157,14 @@ def sync_day(org, day, max_pages=100, delay=2, refresh=False):
                 WHERE organization_id=:o AND day=:d'''),{
                 'o':org,'d':day,'cursor':new_cursor or cursor,
                 'status':'complete' if complete else 'loading'})
+            # Update visible progress in the same transaction as the page.
+            # Never advertise a partial day as financially complete.
+            counts = db.execute(text('''SELECT count(*) AS n, coalesce(sum(amount),0) AS total
+                FROM ozon_finance_accruals WHERE organization_id=:o AND day=:d'''),
+                {'o':org,'d':day}).mappings().one()
+            db.execute(text('''UPDATE ozon_finance_days SET row_count=:n,
+                total_amount=:t WHERE organization_id=:o AND day=:d'''),
+                {'n':counts['n'],'t':counts['total'],'o':org,'d':day})
             db.commit()
             page_count += 1
             cursor = new_cursor or cursor

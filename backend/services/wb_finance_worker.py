@@ -5,6 +5,10 @@ import time
 from datetime import date, timedelta
 from decimal import Decimal
 from sqlalchemy import text
+from backend.services.wb_finance_doc_type_32 import signed
+from backend.services import wb_finance_retry_35 as retry35
+from backend.services.wb_finance_page_diag_36 import summarize_page
+from backend.services.wb_finance_fullpage_42 import (FULL_LIMIT, needs_recovery, validate_full_page)
 from backend.database import SessionLocal
 from backend.auth.tenant import set_app_db_role, set_tenant_context, clear_tenant_context, reset_app_db_role
 from backend.services.marketplace_clients import get_wb_client
@@ -32,7 +36,7 @@ def close(db):
         db.close()
 
 
-def finance_request(db, path, payload):
+def finance_request(db, path, payload, *, diagnostic_report_id=None, timeout=None):
     global last_call
     delay = GAP - (time.monotonic() - last_call)
     if delay > 0 and stop.wait(delay):
@@ -40,7 +44,7 @@ def finance_request(db, path, payload):
     token = get_wb_client(db).headers.get('Authorization')
     last_call = time.monotonic()
     # Existing diagnostic validates HTTP and response format, never prints tokens.
-    return post_finance(token, path, payload)
+    return post_finance(token, path, payload, diagnostic_report_id=diagnostic_report_id, **({"timeout": timeout} if timeout is not None else {}))
 
 
 def work_report(org, rid):
@@ -49,17 +53,55 @@ def work_report(org, rid):
         job = db.execute(text('SELECT cursor_rrd,expected_penalty,expected_deduction,expected_retail,expected_for_pay,expected_logistics,expected_storage,expected_acceptance,expected_additional_payment,expected_bank_payment FROM wb_finance_reports WHERE report_id=:rid AND organization_id=:org'),{'rid':rid,'org':org}).mappings().first()
         if not job: return
         cursor = int(job['cursor_rrd'])
-        data = finance_request(db, f'/api/finance/v1/sales-reports/detailed/{rid}', {'limit':1000,'rrdId':cursor,'fields':[]})
+        detail_path = f'/api/finance/v1/sales-reports/detailed/{rid}'
+        detail_payload = {'limit':1000,'rrdId':cursor,'fields':[]}
+        if rid == 511856341:
+            log.warning('WB_FINANCE_REQUEST_DIAG org=%s report=%s method=POST path=%s rrdId=%s limit=%s fields_count=%s',
+                        org, rid, detail_path, detail_payload['rrdId'], detail_payload['limit'], len(detail_payload['fields']))
+        data = finance_request(db, detail_path, detail_payload,
+                               diagnostic_report_id=rid if rid == 511856341 else None)
         if data is None: raise RuntimeError('Finance API не ответил; проверьте права и лимиты')
         if len(data)>1000: raise RuntimeError('Некорректный размер страницы')
+        # Metadata-only diagnostics. Never logs row content, financial fields or tokens.
+        diag = summarize_page(data, cursor)
+        log.warning('WB_FINANCE_PAGE_CURSOR_DIAG org=%s report=%s cursor=%s rows=%s first=%s last=%s min=%s max=%s ahead=%s behind=%s asc_breaks=%s distinct=%s last_is_max=%s',
+                 org, rid, cursor, diag['page_rows'], diag['page_first'],
+                 diag['page_last'], diag['page_min'], diag['page_max'],
+                 diag['ahead'], diag['at_or_behind'], diag['asc_breaks'],
+                 diag['distinct'], diag['last_is_max'])
+        full_mode = False
+        # WB Finance can return partly out-of-order pages. Do not trust max(rrdId)
+        # in this situation; validate one full report before any production writes.
+        if needs_recovery(data, cursor):
+            log.warning('WB_FINANCE_FULLPAGE_RECOVERY_START org=%s report=%s cursor=%s page_rows=%s limit=%s',
+                        org, rid, cursor, len(data), FULL_LIMIT)
+            complete_data = finance_request(
+                db, detail_path, {'limit': FULL_LIMIT, 'rrdId': 0, 'fields': []},
+                timeout=(20, 240))
+            if complete_data is None:
+                raise RuntimeError('full_page_api_unavailable')
+            info = validate_full_page(complete_data, job, limit=FULL_LIMIT)
+            # Refuse to retain existing records absent from the authoritative
+            # complete response; this prevents silently mixing incompatible sets.
+            existing_ids = set(int(v) for v in db.execute(text('''SELECT rrd_id FROM wb_finance_entries
+                WHERE organization_id=:o AND report_id=:r'''), {'o': org, 'r': rid}).scalars())
+            if existing_ids - info['ids']:
+                raise RuntimeError('full_page_db_has_extra_ids')
+            data = complete_data
+            full_mode = True
+            log.warning('WB_FINANCE_FULLPAGE_RECOVERY_VALIDATED org=%s report=%s rows=%s max_rrd=%s',
+                        org, rid, info['count'], info['max_rrd'])
         ids = [int(row['rrdId']) for row in data]
-        if data and max(ids)<=cursor: raise RuntimeError('Курсор API не продвинулся')
+        if data and max(ids)<=cursor and not full_mode:
+            log.warning('WB_FINANCE_CURSOR_STALLED org=%s report=%s cursor=%s page_rows=%s page_min=%s page_max=%s',
+                        org,rid,cursor,len(ids),min(ids),max(ids))
+            raise RuntimeError('cursor_stalled')
         for row in data:
             def dec(k): return Decimal(str(row.get(k) or 0))
             values = {'o':org, 'r':rid, 'id':int(row['rrdId']),
               'nm':str(row.get('nmId') or '') or None, 'v':str(row.get('vendorCode') or '') or None,
               'sku':str(row.get('sku') or '') or None, 'srid':str(row.get('srid') or '') or None,
-              'oper':str(row.get('sellerOperName') or '')[:250],
+              'oper':str(row.get('sellerOperName') or '')[:250], 'doc_type':str(row.get('docTypeName') or '')[:100] or None,
               'reason':str(row.get('bonusTypeName') or row.get('sellerOperName') or row.get('docTypeName') or 'Не указано')[:500]}
             for field, source in [('ret','retailAmount'),('pay','forPay'),('com','ppvzSalesCommission'),
                     ('vat','vwNds'),('acq','acquiringFee'),('log','deliveryService'),
@@ -67,31 +109,35 @@ def work_report(org, rid):
                     ('ded','deduction'),('additional','additionalPayment')]:
                 values[field] = dec(source)
             db.execute(text('''INSERT INTO wb_finance_entries
-              (organization_id,report_id,rrd_id,nm_id,vendor_code,sku,srid,operation,reason,
+              (organization_id,report_id,rrd_id,nm_id,vendor_code,sku,srid,operation,doc_type,reason,
                retail,for_pay,commission,vat,acquiring,logistics,storage,acceptance,penalty,deduction,additional_payment)
-              VALUES (:o,:r,:id,:nm,:v,:sku,:srid,:oper,:reason,
+              VALUES (:o,:r,:id,:nm,:v,:sku,:srid,:oper,:doc_type,:reason,
                :ret,:pay,:com,:vat,:acq,:log,:storage,:acceptance,:pen,:ded,:additional)
               ON CONFLICT (organization_id,report_id,rrd_id) DO UPDATE SET
                 nm_id=EXCLUDED.nm_id,vendor_code=EXCLUDED.vendor_code,sku=EXCLUDED.sku,
-                srid=EXCLUDED.srid,operation=EXCLUDED.operation,reason=EXCLUDED.reason,
+                srid=EXCLUDED.srid,operation=EXCLUDED.operation,
+                doc_type=COALESCE(EXCLUDED.doc_type,wb_finance_entries.doc_type),reason=EXCLUDED.reason,
                 retail=EXCLUDED.retail,for_pay=EXCLUDED.for_pay,commission=EXCLUDED.commission,
                 vat=EXCLUDED.vat,acquiring=EXCLUDED.acquiring,logistics=EXCLUDED.logistics,
                 storage=EXCLUDED.storage,acceptance=EXCLUDED.acceptance,
                 penalty=EXCLUDED.penalty,deduction=EXCLUDED.deduction,additional_payment=EXCLUDED.additional_payment'''), values)
-        sums = db.execute(text('''SELECT count(*),
-          coalesce(sum(CASE WHEN lower(btrim(operation))='возврат' THEN -retail ELSE retail END),0),
-          coalesce(sum(CASE WHEN lower(btrim(operation))='возврат' THEN -for_pay ELSE for_pay END),0),
+        sums = db.execute(text(f'''SELECT count(*),
+          coalesce(sum({signed('retail')}),0),
+          coalesce(sum({signed('for_pay')}),0),
           coalesce(sum(logistics),0),coalesce(sum(storage),0),coalesce(sum(acceptance),0),
           coalesce(sum(penalty),0),coalesce(sum(deduction),0),coalesce(sum(additional_payment),0)
           FROM wb_finance_entries WHERE organization_id=:o AND report_id=:r'''),{'o':org,'r':rid}).first()
         count = sums[0]
-        if not data or len(data)<1000:
+        if full_mode or not data or len(data)<1000:
             checks = [('expected_retail',sums[1]),('expected_for_pay',sums[2]),
               ('expected_logistics',sums[3]),('expected_storage',sums[4]),
               ('expected_acceptance',sums[5]),('expected_penalty',sums[6]),
               ('expected_deduction',sums[7]),('expected_additional_payment',sums[8])]
             mismatches = [key for key,actual in checks if job[key] is not None
                           and abs(job[key] - actual) > Decimal('0.02')]
+            # Full-source recovery is atomic: never commit partial/inconsistent data.
+            if full_mode and (mismatches or count != len(data)):
+                raise RuntimeError('full_page_postwrite_verification_failed')
             status = 'mismatch' if mismatches else 'complete'
             error = ('Несоответствие: ' + ', '.join(mismatches)) if mismatches else None
         else:
@@ -101,12 +147,19 @@ def work_report(org, rid):
           WHERE organization_id=:o AND report_id=:r'''),
           {'c':max(ids) if ids else cursor,'n':count,'s':status,'e':error,'o':org,'r':rid})
         db.commit()
-        log.info('WB_FINANCE_PAGE_OK org=%s report=%s rows=%s total=%s status=%s',org,rid,len(data),count,status)
+        retry35.record_result('weekly',org,rid,status)
+        log.info('WB_FINANCE_PAGE_OK org=%s report=%s rows=%s total=%s status=%s full_mode=%s',org,rid,len(data),count,status,full_mode)
     except Exception as exc:
         db.rollback()
         db.execute(text("UPDATE wb_finance_reports SET status='retry',last_error=:e,updated_at=now() WHERE organization_id=:o AND report_id=:r"),{'e':type(exc).__name__,'o':org,'r':rid})
         db.commit()
-        log.warning('WB_FINANCE_PAGE_RETRY org=%s report=%s type=%s',org,rid,type(exc).__name__)
+        delay=retry35.record_result('weekly',org,rid,'retry')
+        reason=('cursor_stalled' if str(exc)=='cursor_stalled' else
+                'api_unavailable' if isinstance(exc,RuntimeError) and 'ответил' in str(exc) else
+                'invalid_page' if isinstance(exc,RuntimeError) and 'размер страницы' in str(exc) else
+                'unexpected_error')
+        log.warning('WB_FINANCE_PAGE_RETRY org=%s report=%s type=%s reason=%s retry_seconds=%s',
+                    org,rid,type(exc).__name__,reason,delay)
     finally: close(db)
 
 
@@ -194,20 +247,22 @@ def loop():
                 # Alternate daily/weekly pages within that month to avoid starvation.
                 d = context(org)
                 try:
-                    daily_job = d.execute(text("""
-                        SELECT report_id, report_date AS report_day
+                    daily_candidates = d.execute(text("""
+                        SELECT report_id, report_date AS report_day, status, updated_at
                         FROM wb_finance_daily_reports
                         WHERE organization_id=:o
                           AND status IN ('queued','loading','retry')
-                        ORDER BY report_date DESC, report_id DESC LIMIT 1
-                    """), {'o': org}).mappings().first()
-                    weekly_job = d.execute(text("""
-                        SELECT report_id, date_to AS report_day
+                        ORDER BY report_date DESC, report_id DESC LIMIT 50
+                    """), {'o': org}).mappings().all()
+                    daily_job = retry35.pick('daily',org,daily_candidates)
+                    weekly_candidates = d.execute(text("""
+                        SELECT report_id, date_to AS report_day, status, updated_at
                         FROM wb_finance_reports
                         WHERE organization_id=:o
                           AND status IN ('queued','loading','retry')
-                        ORDER BY date_to DESC, report_id DESC LIMIT 1
-                    """), {'o': org}).mappings().first()
+                        ORDER BY date_to DESC, report_id DESC LIMIT 50
+                    """), {'o': org}).mappings().all()
+                    weekly_job = retry35.pick('weekly',org,weekly_candidates)
                 finally:
                     close(d)
 

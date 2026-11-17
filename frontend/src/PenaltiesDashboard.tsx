@@ -6,8 +6,8 @@ import './Reviews.css';
 
 type Marketplace = 'WB' | 'OZON' | 'YANDEX';
 type Item = { description: string; sku: string; quantity: number; amount: number };
-type Reason = { reason: string; quantity: number; amount: number; items: Item[] };
-type MarketData = { available: boolean; total: number | null; reasons: Reason[]; message?: string; report_statuses?: Record<string, number> };
+type Reason = { reason: string; quantity: number; amount: number; items: Item[]; category?: 'fine' | 'additional'; type_id?: string };
+type MarketData = { available: boolean; total: number | null; reasons: Reason[]; fines_total?: number; additional_total?: number; message?: string; report_statuses?: Record<string, number> };
 type Data = { marketplaces: Record<Marketplace, MarketData>; note: string };
 const names: Record<Marketplace, string> = { WB: 'WB', OZON: 'Ozon', YANDEX: 'Я.Маркет' };
 const all: Marketplace[] = ['WB', 'OZON', 'YANDEX'];
@@ -56,24 +56,25 @@ export default function PenaltiesDashboard() {
     selected.forEach(m => {
       const details = data.marketplaces[m];
       if (!details?.available) {
-        reasons.push([names[m], from, to, 'Данные недоступны', '', '']);
-        articles.push([names[m], from, to, 'Данные недоступны', '', '', '']);
+        reasons.push([names[m], from, to, 'Данные недоступны', '', '', '']);
+        articles.push([names[m], from, to, 'Данные недоступны', '', '', '', '']);
         return;
       }
       details.reasons.forEach(r => {
-        reasons.push([names[m], from, to, r.reason, r.quantity, r.amount]);
-        r.items.forEach(item => articles.push([names[m], from, to, r.reason, item.sku || '', item.quantity, item.amount]));
+        const category = r.category === 'additional' ? 'Дополнительное удержание' : 'Штраф';
+        reasons.push([names[m], from, to, category, r.reason, r.quantity, r.amount]);
+        r.items.forEach(item => articles.push([names[m], from, to, category, r.reason, item.sku || '', item.quantity, item.amount]));
       });
     });
-    downloadWorkbook(`Штрафы_${from}_${to}.xlsx`, [
-      { name: 'Причины штрафов', headers: ['Маркетплейс','С','По','Описание штрафа','Кол-во','Сумма, ₽'], rows: reasons, widths: [16,14,14,58,14,20] },
-      { name: 'По артикулам', headers: ['Маркетплейс','С','По','Описание','Артикул','Кол-во','Сумма, ₽'], rows: articles, widths: [16,14,14,58,20,14,20] }
+    downloadWorkbook(`Штрафы_и_удержания_${from}_${to}.xlsx`, [
+      { name: 'Причины', headers: ['Маркетплейс','С','По','Категория','Описание','Кол-во','Сумма, ₽'], rows: reasons, widths: [16,14,14,26,58,14,20] },
+      { name: 'По артикулам', headers: ['Маркетплейс','С','По','Категория','Описание','Артикул','Кол-во','Сумма, ₽'], rows: articles, widths: [16,14,14,26,58,20,14,20] }
     ]);
   }
   const incompletes = (data?.marketplaces.WB.report_statuses || {});
   const pending = (incompletes.queued || 0) + (incompletes.loading || 0) + (incompletes.retry || 0) + (incompletes.mismatch || 0);
   return <section className="penalty-dash">
-    <div className="penalty-head"><h2>Штрафы за период</h2><span>Даты финансовых отчётов</span></div>
+    <div className="penalty-head"><h2>Штрафы и дополнительные удержания</h2><span>Даты финансовых отчётов</span></div>
     <div className="penalty-filters">
       <DashboardPeriodPicker from={from} to={to} onChange={(nextFrom,nextTo)=>{setFrom(nextFrom);setTo(nextTo)}} label="Период финансовых отчётов" />
       <div className="penalty-picks">
@@ -84,15 +85,17 @@ export default function PenaltiesDashboard() {
     {!valid && <p role="alert" className="penalty-error">Укажите период не больше 367 дней, с датой начала не позже окончания.</p>}
     {error && <p role="alert" className="penalty-error">Не удалось загрузить штрафы: {error}</p>}
     <div className="penalty-cards penalty-cards-with-total">
-      <div className="penalty-card penalty-card-total" aria-label="Сумма штрафов по выбранным маркетплейсам">
-        <span>Все · сумма выбранных</span>
+      <div className="penalty-card penalty-card-total" aria-label="Сумма штрафов и дополнительных удержаний по выбранным маркетплейсам">
+        <span>Всего · выбранные категории</span>
         <strong>{!data ? '—' : activePenalties.length ? money(penaltiesTotal) : 'Нет данных'}</strong>
         <small>{penaltiesPartial ? 'Частичная сумма: не все МП подключены' : 'Все выбранные МП'}</small>
       </div>
       {all.filter(m=>selected.includes(m)).map(m=>{
         const item=data?.marketplaces[m];return <button type="button" key={m} className={`penalty-card ${active===m?'active':''}`} onClick={()=>toggleMarket(m)}>
           <span>{names[m]}</span><strong>{item?.available ? money(item.total||0) : 'Нет данных'}</strong>
-          <small>{item?.available?'Посмотреть детализацию':'Источник ещё не подключён'}</small>
+          <small>{item?.available && m === 'OZON' && item.fines_total != null && item.additional_total != null
+            ? `Штрафы ${money(item.fines_total)} · доп. удержания ${money(item.additional_total)}`
+            : item?.available ? 'Посмотреть детализацию' : 'Источник ещё не подключён'}</small>
         </button>;
       })}
     </div>
@@ -100,15 +103,15 @@ export default function PenaltiesDashboard() {
     {pending>0 && selected.includes('WB') && <p className="penalty-note">WB: {pending} отчётов за период ещё не сверены или ожидают загрузки. Сумма может измениться.</p>}
     {active && market && <div className="penalty-details">
       <div className="penalty-details-heading">
-        <h3>Детализация штрафов — {names[active]}</h3>
+        <h3>Детализация штрафов и удержаний — {names[active]}</h3>
         <button type="button" className="dashboard-xlsx-button" onClick={exportPenalties} disabled={busy || !valid || !data}>Скачать Excel</button>
       </div>
       {!market.available ? <p className="penalty-note">{market.message}</p> : <>
-        <div className="penalty-table-wrap"><table><thead><tr><th>Описание штрафа</th><th>Кол-во</th><th>Сумма</th></tr></thead><tbody>
-          {market.reasons.map(r=><tr key={r.reason} className={openReason===r.reason?'active':''} onClick={()=>setOpenReason(prev=>prev===r.reason?null:r.reason)} tabIndex={0} onKeyDown={e=>{if(e.key==='Enter'||e.key===' '){e.preventDefault();setOpenReason(prev=>prev===r.reason?null:r.reason)}}}>
-            <td>{r.reason}</td><td>{r.quantity.toLocaleString('ru-RU')}</td><td>{money(r.amount)}</td>
+        <div className="penalty-table-wrap"><table><thead><tr><th>Категория</th><th>Описание</th><th>Кол-во</th><th>Сумма</th></tr></thead><tbody>
+          {market.reasons.map(r=><tr key={`${r.category || 'fine'}-${r.type_id || r.reason}`} className={openReason===r.reason?'active':''} onClick={()=>setOpenReason(prev=>prev===r.reason?null:r.reason)} tabIndex={0} onKeyDown={e=>{if(e.key==='Enter'||e.key===' '){e.preventDefault();setOpenReason(prev=>prev===r.reason?null:r.reason)}}}>
+            <td>{r.category === 'additional' ? 'Доп. удержание' : 'Штраф'}</td><td>{r.reason}</td><td>{r.quantity.toLocaleString('ru-RU')}</td><td>{money(r.amount)}</td>
           </tr>)}
-          {!market.reasons.length&&<tr><td colSpan={3}>За выбранный период штрафов в загруженных отчётах нет.</td></tr>}
+          {!market.reasons.length&&<tr><td colSpan={4}>За выбранный период штрафов и дополнительных удержаний в загруженных отчётах нет.</td></tr>}
         </tbody></table></div>
         {openReason && market.reasons.some(r=>r.reason===openReason) && <div className="penalty-items">
           <h4>{openReason}</h4><div className="penalty-table-wrap"><table><thead><tr><th>Описание</th><th>Артикул</th><th>Кол-во</th><th>Сумма</th></tr></thead><tbody>
@@ -117,6 +120,6 @@ export default function PenaltiesDashboard() {
         </div>}
       </>}
     </div>}
-    <p className="penalty-foot">Штрафы WB считаются только из ежедневных финансовых отчётов, без дублирования недельных. «Кол-во» — число записей по штрафам, не уникальных артикулов.</p>
+    <p className="penalty-foot">WB: штрафы из ежедневных отчётов без дублирования недельных. Ozon: штрафы (92, 94, DefectFine*) и отдельно дополнительные удержания (82, 96, 15). «Кол-во» — число операций, не уникальных артикулов.</p>
   </section>;
 }

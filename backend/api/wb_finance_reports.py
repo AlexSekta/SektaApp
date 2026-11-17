@@ -3,6 +3,7 @@ from datetime import date
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from sqlalchemy import text
+from backend.services.wb_finance_doc_type_32 import signed
 from sqlalchemy.orm import Session
 
 from backend.auth.security import require_current_user
@@ -57,13 +58,13 @@ def reports(request: Request, date_from: str | None = None, date_to: str | None 
         raise HTTPException(422, 'Неверный формат даты') from exc
     if end < start:
         raise HTTPException(422, 'Дата окончания раньше начала')
-    rows = db.execute(text('''SELECT
+    rows = db.execute(text(f'''SELECT
         r.report_id,r.date_from,r.date_to,r.report_type,r.status,r.loaded_rows,r.last_error,
         r.expected_retail,r.expected_for_pay,r.expected_bank_payment,
         r.expected_logistics,r.expected_storage,r.expected_acceptance,
         r.expected_penalty,r.expected_deduction,r.expected_additional_payment,
-        coalesce(sum(CASE WHEN lower(btrim(e.operation))='возврат' THEN -e.retail ELSE e.retail END),0) retail,
-        coalesce(sum(CASE WHEN lower(btrim(e.operation))='возврат' THEN -e.for_pay ELSE e.for_pay END),0) for_pay,
+        coalesce(sum({signed('retail','e')}),0) retail,
+        coalesce(sum({signed('for_pay','e')}),0) for_pay,
         coalesce(sum(e.commission),0) commission,
         coalesce(sum(e.vat),0) vat,
         coalesce(sum(e.acquiring),0) acquiring,
@@ -95,9 +96,9 @@ def weekly_metric_details(report_id: int, request: Request,
     expr,label = DAILY_METRICS[metric]
     # Retail/forPay returned in WB detail as magnitudes: returns must be negative.
     if metric in ('retail','for_pay'):
-        expr = f"(CASE WHEN lower(btrim(operation))='возврат' THEN -{expr} ELSE {expr} END)"
+        expr = signed(metric)
     if metric == 'bank_payment':
-        expr = "((CASE WHEN lower(btrim(operation))='возврат' THEN -for_pay ELSE for_pay END) - logistics - storage - acceptance - penalty - deduction + additional_payment)"
+        expr = f'({signed("for_pay")} - logistics - storage - acceptance - penalty - deduction + additional_payment)'
     rows=db.execute(text(f'''SELECT
         coalesce(nullif(vendor_code,''),nullif(sku,''),nullif(nm_id,''),'') identifier,
         reason, operation,count(*) rows, round(coalesce(sum({expr}),0),2) amount
@@ -199,7 +200,7 @@ def daily_reports(request: Request, date_from: str, date_to: str, db: Session = 
         raise HTTPException(422, 'Диапазон должен быть не более 367 дней')
 
     o = org_id(db)
-    rows = db.execute(text('''
+    rows = db.execute(text(f'''
         SELECT
             r.report_id,
             r.report_date,
@@ -214,8 +215,8 @@ def daily_reports(request: Request, date_from: str, date_to: str, db: Session = 
             r.expected_logistics,
             r.expected_penalty,
             r.expected_deduction,
-            coalesce(sum(e.retail), 0) retail,
-            coalesce(sum(e.for_pay), 0) for_pay,
+            coalesce(sum({signed('retail','e')}), 0) retail,
+            coalesce(sum({signed('for_pay','e')}), 0) for_pay,
             coalesce(sum(e.commission), 0) commission,
             coalesce(sum(e.vat), 0) vat,
             coalesce(sum(e.acquiring), 0) acquiring,
@@ -297,6 +298,10 @@ def daily_metric_details(
         raise HTTPException(422, 'Неизвестный показатель')
 
     expr, label = metric_info
+    if metric in ('retail', 'for_pay'):
+        expr = signed(metric)
+    elif metric == 'bank_payment':
+        expr = f'({signed("for_pay")} - logistics - storage - acceptance - penalty - deduction + additional_payment)'
     sql = f'''
         SELECT
             coalesce(nullif(vendor_code,''), nullif(sku,''), nullif(nm_id,''), '') identifier,

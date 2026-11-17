@@ -3,6 +3,7 @@ from datetime import date
 
 from fastapi import APIRouter, Depends, HTTPException, Request
 from sqlalchemy import text
+from backend.services.wb_finance_doc_type_32 import signed
 from sqlalchemy.orm import Session
 
 from backend.auth.security import require_current_user
@@ -28,12 +29,11 @@ def payouts_dashboard(request: Request, date_from: str, date_to: str, db: Sessio
     # Use WB's own bank payout figure for finalized reports. For reports still
     # being loaded use a provisional signed sum of financial entry operations.
     # This is a report-date aggregation, not a payment receipt date.
-    rows = db.execute(text('''
+    rows = db.execute(text(f'''
         SELECT r.report_id, r.report_date, r.report_type, r.status,
                r.expected_bank_payment,
                COALESCE(SUM(
-                  CASE WHEN LOWER(BTRIM(COALESCE(e.operation,''))) = 'возврат'
-                       THEN -e.for_pay ELSE e.for_pay END
+                  {signed('for_pay','e')}
                   - e.logistics - e.storage - e.acceptance
                   - e.penalty - e.deduction + e.additional_payment
                ), 0) AS calculated_payout

@@ -11,6 +11,14 @@ from backend.auth.security import require_current_user
 
 router = APIRouter(prefix='/analytics', tags=['Аналитика — штрафы'])
 
+# These are separate paid services/deductions, NOT fines. Preserve this distinction.
+OZON_ADDITIONAL_FEE_TYPES = {
+    '82': 'Обработка объёмно-весовых характеристик',
+    '96': 'Ускоренный сбор отзывов',
+    '15': 'Утилизация',
+}
+
+
 
 def organization_id(db: Session) -> int:
     oid = db.execute(text("SELECT NULLIF(current_setting('app.organization_id', true), '')::integer")).scalar()
@@ -73,6 +81,7 @@ def penalties_breakdown(request: Request, date_from: str, date_to: str, db: Sess
     catalog_rows = db.execute(text("""SELECT type_id, name, description
         FROM ozon_finance_type_catalog WHERE organization_id=:o"""), {'o':org}).mappings().all()
     fine_types = {}
+    additional_types = {}
     for item in catalog_rows:
         type_id = str(item['type_id'])
         api_name = str(item['name'] or '')
@@ -80,6 +89,8 @@ def penalties_breakdown(request: Request, date_from: str, date_to: str, db: Sess
         # Explicitly verified fines + further DefectFine* types from the Ozon catalog.
         if type_id in ('92', '94') or api_name.startswith('DefectFine'):
             fine_types[type_id] = api_description or api_name or f'Тип штрафа {type_id}'
+        elif type_id in OZON_ADDITIONAL_FEE_TYPES:
+            additional_types[type_id] = OZON_ADDITIONAL_FEE_TYPES[type_id]
 
     ozon_rows = db.execute(text("""SELECT a.item_fees, a.non_item_fee,
                a.container_fees, a.posting
@@ -113,13 +124,14 @@ def penalties_breakdown(request: Request, date_from: str, date_to: str, db: Sess
     for entry in ozon_rows:
         def register(fee, sku=None):
             tid = str(fee.get('type_id', ''))
-            if tid not in fine_types: return
+            if tid not in fine_types and tid not in additional_types: return
             value = _money_field(fee.get('accrued'))
             if value is None or value == 0: return
             # Fines are negative accruals. Positive reversals reduce the net fine.
             cost = -value
-            reason = fine_types[tid]
-            bucket = ozon_reasons[reason]
+            category = 'fine' if tid in fine_types else 'additional'
+            reason = fine_types[tid] if category == 'fine' else additional_types[tid]
+            bucket = ozon_reasons[(category, tid, reason)]
             bucket['quantity'] += 1
             bucket['amount'] += cost
             article_candidates = sku_to_article.get(str(sku), set()) if sku is not None else set()
@@ -142,16 +154,18 @@ def penalties_breakdown(request: Request, date_from: str, date_to: str, db: Sess
                     register(fee, product.get('sku'))
 
     ozon_result = []
-    for reason, bucket in ozon_reasons.items():
+    for (category, tid, reason), bucket in ozon_reasons.items():
         ozon_result.append({
-            'reason':reason, 'quantity':bucket['quantity'],
+            'reason':reason, 'category':category, 'type_id':tid, 'quantity':bucket['quantity'],
             'amount':round(float(bucket['amount']),2),
             'items':[{'description':reason, 'sku':article,
                       'quantity':part['quantity'], 'amount':round(float(part['amount']),2)}
                      for article,part in sorted(bucket['items'].items())]
         })
     ozon_result.sort(key=lambda r:abs(r['amount']), reverse=True)
-    ozon_total = round(sum(r['amount'] for r in ozon_result), 2)
+    ozon_fines_total = round(sum(r['amount'] for r in ozon_result if r['category'] == 'fine'), 2)
+    ozon_additional_total = round(sum(r['amount'] for r in ozon_result if r['category'] == 'additional'), 2)
+    ozon_total = round(ozon_fines_total + ozon_additional_total, 2)
     ozon_states = db.execute(text("""SELECT status, count(*)::integer AS quantity
         FROM ozon_finance_days
         WHERE organization_id=:o AND day BETWEEN :start AND :end
@@ -165,10 +179,11 @@ def penalties_breakdown(request: Request, date_from: str, date_to: str, db: Sess
                 'reasons': sorted(reasons.values(), key=lambda x: abs(x['amount']), reverse=True),
                 'report_statuses': {row['status']: row['quantity'] for row in status_counts},
             },
-            'OZON': {'available': True, 'total': ozon_total, 'reasons': ozon_result,
+            'OZON': {'available': True, 'total': ozon_total, 'fines_total': ozon_fines_total,
+                     'additional_total': ozon_additional_total, 'reasons': ozon_result,
                      'report_statuses': {r['status']:r['quantity'] for r in ozon_states},
-                     'message': 'Учитываются только подтверждённые штрафные типы Ozon'},
+                     'message': 'Штрафы и три отдельно выделенных вида дополнительных удержаний Ozon'},
             'YANDEX': {'available': False, 'total': None, 'reasons': [], 'message': 'Загрузка штрафов Я.Маркета пока не подключена'},
         },
-        'note': 'Штрафы WB — из ежедневных финансовых отчётов. Ozon — из подтверждённых штрафных типов в ежедневных начислениях. Незагруженные дни не включены.',
+        'note': 'WB: штрафы из ежедневных финансовых отчётов. Ozon: штрафы отдельно от трёх видов дополнительных удержаний (82, 96, 15). Незагруженные дни не включены.',
     }

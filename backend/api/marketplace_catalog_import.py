@@ -1,6 +1,9 @@
 """Controlled first-time import. Preview is read-only; POST imports a selected card only."""
 from datetime import datetime
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
+import re
 import json
+import hashlib
 from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel
 from sqlalchemy.orm import Session
@@ -9,8 +12,11 @@ from backend.auth.security import require_current_user
 from backend.dependencies import get_db
 from backend.models.master_product import MasterProduct
 from backend.models.product import Product
-from backend.models.wb_identity import WBIdentityLink
+from backend.models.wb_identity import WBIdentityLink, WBIdentityReview
 from backend.models.marketplace_catalog_card import MarketplaceCatalogCard
+from backend.models.marketplace_product_barcode import MarketplaceProductBarcode
+from backend.models.catalog_sync_setting import CatalogSyncSetting
+from backend.services.catalog_bulk_match_27 import candidates as safe_bulk_candidates, fingerprint as bulk_fingerprint
 from backend.services.marketplace_catalog_import import read_marketplace
 from backend.services.wb_identity_service import org_id
 from backend.logging_config import get_logger
@@ -86,7 +92,368 @@ def classify(db, rows):
         row['status'] = ('CONFLICT' if row['conflict_reason'] else
                          'LINKED' if confirmed else
                          'MATCH' if len(matches) == 1 else 'NEW')
+        # Read-only Ozon reconciliation. Matching seller article does not prove
+        # identical barcode: platform barcode(s) are independent identifiers.
+        if market == 'OZON':
+            master = masters_by_id.get(row['master_id']) if row['master_id'] is not None else None
+            local_barcode = str(master.barcode or '').strip() if master else ''
+            remote_barcodes = list(dict.fromkeys(str(b).strip() for b in
+                                    (row.get('barcodes') or []) if str(b).strip()))
+            row['catalog_barcode'] = local_barcode or None
+            row['catalog_name'] = (master.name or None) if master else None
+            row['barcode_check'] = (
+                'UNRESOLVED' if master is None else
+                'MISSING_ON_OZON' if not remote_barcodes else
+                'MISSING_IN_CATALOG' if not local_barcode else
+                'SAME' if local_barcode in remote_barcodes else 'DIFFERENT'
+            )
+            row['barcode_check_read_only'] = True
+            # Dimensions are independently audited. Missing Ozon data and API
+            # errors must not be treated as matching catalog dimensions.
+            source_status = row.get('dimension_fetch_status', 'UNKNOWN')
+            ozon_dims = row.get('dimensions')
+            fields = ('length_cm', 'width_cm', 'height_cm')
+            if source_status == 'API_ERROR':
+                dimension_check = 'OZON_API_ERROR'
+            elif not ozon_dims:
+                dimension_check = 'OZON_MISSING'
+            elif master is None:
+                dimension_check = 'UNRESOLVED'
+            elif any(getattr(master, field, None) is None for field in fields):
+                dimension_check = 'CATALOG_MISSING'
+            elif any(abs(float(getattr(master,field)) - ozon_dims[field]) > 0.01 for field in fields):
+                dimension_check = 'DIFFERENT'
+            else:
+                dimension_check = 'SAME'
+            row['dimension_check'] = dimension_check
+            row['catalog_dimensions'] = ({field:getattr(master,field,None) for field in fields}
+                                         if master else None)
+            row['dimension_check_read_only'] = True
     return rows
+
+
+# Scheduled runs are deliberately NOT activated until a separate scheduler patch.
+DEFAULT_SCHEDULE = ['06:00', '18:00', '23:00']
+
+
+def _setting(db, oid):
+    return db.query(CatalogSyncSetting).filter(CatalogSyncSetting.organization_id == oid).first()
+
+
+def _setting_view(row):
+    return {'match_by': row.match_by if row else 'ARTICLE',
+            'auto_enabled': bool(row.auto_enabled) if row else False,
+            'timezone': row.timezone if row else 'Europe/Moscow',
+            'times': json.loads(row.times_json) if row else DEFAULT_SCHEDULE,
+            'scheduler_active': False}
+
+
+class MatchingSettingsInput(BaseModel):
+    match_by: str
+    auto_enabled: bool = False
+    timezone: str = 'Europe/Moscow'
+    times: list[str]
+
+
+@router.get('/matching-settings')
+def matching_settings_get(request: Request, db: Session = Depends(get_db)):
+    owner(request)
+    return _setting_view(_setting(db, org_id(db)))
+
+
+@router.put('/matching-settings')
+def matching_settings_save(payload: MatchingSettingsInput, request: Request, db: Session = Depends(get_db)):
+    owner(request)
+    if payload.match_by not in ('ARTICLE', 'BARCODE'):
+        raise HTTPException(422, 'Выберите артикул продавца или штрихкод')
+    if not 1 <= len(payload.times) <= 12 or len(set(payload.times)) != len(payload.times):
+        raise HTTPException(422, 'Укажите от 1 до 12 различных времён запуска')
+    if any(not re.fullmatch(r'(?:[01]\d|2[0-3]):[0-5]\d', t) for t in payload.times):
+        raise HTTPException(422, 'Время должно иметь формат ЧЧ:ММ')
+    # Windows installations may not ship the IANA tz database. Common zones
+    # work without the optional tzdata package; arbitrary zones require it.
+    known_zones = {'Europe/Moscow', 'UTC', 'Europe/Amsterdam', 'Asia/Yekaterinburg',
+                   'Asia/Novosibirsk', 'Asia/Krasnoyarsk', 'Asia/Irkutsk',
+                   'Asia/Vladivostok', 'Asia/Kamchatka'}
+    if payload.timezone not in known_zones:
+        try:
+            ZoneInfo(payload.timezone)
+        except (ZoneInfoNotFoundError, ValueError, KeyError):
+            raise HTTPException(422, 'Неизвестный часовой пояс; установите пакет tzdata')
+    oid = org_id(db)
+    row = _setting(db, oid)
+    if row is None:
+        row = CatalogSyncSetting(organization_id=oid)
+        db.add(row)
+    row.match_by = payload.match_by
+    row.auto_enabled = payload.auto_enabled
+    row.timezone = payload.timezone
+    row.times_json = json.dumps(sorted(payload.times))
+    db.commit()
+    return _setting_view(row)
+
+
+class AutoApplyInput(BaseModel):
+    fingerprint: str
+    match_by: str
+
+
+
+def _read_all_matching(db):
+    """Read every enabled marketplace; never treat a partial remote read as a full batch."""
+    from backend.services.unified_catalog_sync_23 import configured_markets
+    markets, skipped = configured_markets(db)
+    if not markets:
+        raise HTTPException(409, 'Нет подключённых маркетплейсов с API-ключами')
+    rows_by_market = {}
+    failed = []
+    tenant = org_id(db)
+    for market in markets:
+        try:
+            rows = read_marketplace(db, market)
+            if not isinstance(rows, list):
+                raise ValueError('Invalid marketplace response')
+            if any(str(r.get('marketplace', market)).upper() != market for r in rows):
+                raise ValueError('Mismatched marketplace response')
+            rows_by_market[market] = rows
+        except Exception as exc:
+            db.rollback()
+            # get_db uses session-level SET ROLE and app.organization_id. A rollback
+            # during a remote client failure can undo their initial SET statements.
+            # Re-establish both before any further ORM query in this request.
+            from backend.auth.tenant import set_app_db_role, set_tenant_context
+            if db.get_bind().dialect.name == "postgresql":
+                set_app_db_role(db)
+                set_tenant_context(db, tenant)
+            log.warning('CATALOG_ALL_MATCH_FETCH_FAILED market=%s error_type=%s',market,type(exc).__name__)
+            failed.append(market)
+    return markets, skipped, rows_by_market, failed
+
+
+def _all_candidates(db, rows_by_market, method):
+    proposed, excluded = [], []
+    for market, rows in rows_by_market.items():
+        matches, invalid = safe_bulk_candidates(db, rows, method, marketplace=market)
+        proposed.extend([dict(p, marketplace=market) for p in matches])
+        excluded.extend([dict(x, marketplace=market) for x in invalid])
+    return proposed, excluded
+
+
+def _matching_report(db, markets, rows_by_market, proposed, excluded, match_by, failed):
+    """Explain planned writes separately from skips. No database mutation.
+
+    Counts describe remote cards, not unique master products. Some exclusion
+    reasons are not sufficient to distinguish new goods from ambiguous matches;
+    consult tenant-scoped catalog rows for those cases.
+    """
+    from collections import Counter
+    masters = db.query(MasterProduct).all()
+    by_article = Counter(str(m.seller_article or '').strip() for m in masters)
+    by_barcode = Counter(str(m.barcode or '').strip() for m in masters if m.barcode)
+    stats = {market: dict(received=len(rows_by_market.get(market, [])) if market not in failed else None,
+                          new_links=0, already_linked=0, new_products=0,
+                          needs_review=0, api_error=(market in failed))
+             for market in markets}
+    classified = []
+    for p in proposed:
+        stats[p['marketplace']]['new_links'] += 1
+    for p in excluded:
+        reason = p['reason']
+        category = 'NEEDS_REVIEW'
+        if reason == 'ALREADY_LINKED':
+            category = 'ALREADY_LINKED'
+        elif reason in ('NO_UNIQUE_CATALOG_ARTICLE', 'NO_UNIQUE_CATALOG_BARCODE'):
+            # Only zero plausible local candidates is a NEW product; multiple
+            # candidates and absent/malformed identifiers stay for review.
+            if match_by == 'ARTICLE':
+                count = by_article[str(p.get('article') or '').strip()]
+            else:
+                source = next((r for r in rows_by_market.get(p['marketplace'], [])
+                               if str(r.get('external_id')) == str(p['external_id'])), None)
+                codes = set(str(x).strip() for x in ((source or {}).get('barcodes') or []) if str(x).strip())
+                count = sum(by_barcode[x] for x in codes)
+            if count == 0 and (match_by == 'ARTICLE' or
+                               (codes and by_article[str(p.get('article') or '').strip()] == 0)):
+                category = 'NEW_PRODUCT'
+        bucket = {'ALREADY_LINKED':'already_linked', 'NEW_PRODUCT':'new_products',
+                  'NEEDS_REVIEW':'needs_review'}[category]
+        stats[p['marketplace']][bucket] += 1
+        classified.append(dict(p, category=category))
+    return dict(by_marketplace=stats, excluded_details=classified,
+                operation_count=len(proposed),
+                note='Только новые связи. Товары, которые уже связаны, не записываются повторно.')
+
+
+def _all_fingerprint(proposed, excluded, method, markets):
+    payload = dict(match_by=method, markets=sorted(markets),
+                   proposed=sorted(proposed,key=lambda p:(p['marketplace'],p['external_id'])),
+                   excluded=sorted(excluded,key=lambda p:(p['marketplace'],p['external_id'],p['reason'])))
+    return hashlib.sha256(json.dumps(payload,sort_keys=True,ensure_ascii=False,default=str).encode()).hexdigest()
+
+
+@router.get('/auto-preview')
+def all_auto_preview(request: Request, db: Session = Depends(get_db)):
+    owner(request)
+    method = _setting_view(_setting(db, org_id(db)))['match_by']
+    markets, skipped, rows, failed = _read_all_matching(db)
+    proposed, excluded = _all_candidates(db, rows, method)
+    report = _matching_report(db, markets, rows, proposed, excluded, method, failed)
+    return dict(match_by=method, marketplaces=markets,
+                received={m:len(items) for m,items in rows.items()},
+                skipped=skipped, failed=failed, proposals=proposed, excluded=excluded,
+                by_marketplace=report['by_marketplace'],
+                excluded_details=report['excluded_details'],
+                operation_count=report['operation_count'],
+                fingerprint=_all_fingerprint(proposed,excluded,method,markets) if not failed else None,
+                can_apply=not failed, read_only=True)
+
+
+@router.post('/auto-apply')
+def all_auto_apply(payload: AutoApplyInput, request: Request, db: Session = Depends(get_db)):
+    """One explicit, verified transaction for all configured marketplaces."""
+    user = owner(request)
+    tenant = org_id(db)
+    method = _setting_view(_setting(db,tenant))['match_by']
+    if method != payload.match_by:
+        raise HTTPException(409,'Правило сопоставления изменилось')
+    markets, skipped, rows, failed = _read_all_matching(db)
+    if failed:
+        raise HTTPException(409,'Не все маркетплейсы доступны. Повторите предварительную сверку')
+    # Lock existing identities before recomputing candidate safety checks.
+    db.query(MarketplaceCatalogCard).filter(MarketplaceCatalogCard.organization_id == tenant).with_for_update().all()
+    db.query(WBIdentityLink).filter(WBIdentityLink.organization_id == tenant).with_for_update().all()
+    proposals, excluded = _all_candidates(db, rows, method)
+    if _all_fingerprint(proposals,excluded,method,markets) != payload.fingerprint:
+        raise HTTPException(409,'Список карточек изменился. Проверьте кандидатов повторно')
+    if not proposals:
+        raise HTTPException(409,'Нет новых однозначных связей')
+    if len(proposals)>5000:
+        raise HTTPException(422,'Более 5000 связей за один запуск — разделите операцию')
+    try:
+        for item in proposals:
+            market = item['marketplace']
+            external = item['external_id']
+            article = item['article']
+            master = db.query(MasterProduct).filter(MasterProduct.organization_id == tenant,
+                         MasterProduct.id == item['master_id']).with_for_update().first()
+            if master is None or (method == 'ARTICLE' and master.seller_article != article):
+                raise HTTPException(409,'Каталог изменился — перепроверьте совпадения')
+            if market == 'WB':
+                db.add(WBIdentityLink(organization_id=tenant,nm_id=external,
+                       master_id=master.id,current_article=article,confirmed_at=datetime.utcnow()))
+                review = db.query(WBIdentityReview).filter(WBIdentityReview.organization_id == tenant,
+                          WBIdentityReview.nm_id == external).first()
+                if review and review.status == 'OPEN':
+                    review.status = 'APPROVED'
+                    review.master_id = master.id
+                    review.reviewed_at = datetime.utcnow()
+                    review.reviewed_by = str(user.id)
+            else:
+                db.add(MarketplaceCatalogCard(organization_id=tenant,marketplace=market,
+                    external_id=external,seller_article=article,master_id=master.id,
+                    title=item['remote_name'],barcode=(item['barcodes'] or [None])[0],
+                    platform_ids_json=json.dumps(item['platform_ids'],ensure_ascii=False),
+                    **(item['dimensions'] or {})))
+                for bc in dict.fromkeys(item['barcodes']):
+                    if bc:
+                        db.add(MarketplaceProductBarcode(organization_id=tenant,master_id=master.id,
+                            marketplace=market,external_id=external,barcode=bc))
+        db.commit()
+    except IntegrityError as exc:
+        db.rollback()
+        raise HTTPException(409,'Изменились связи; вся операция отменена') from exc
+    except Exception:
+        db.rollback()
+        raise
+    return dict(status='ok',linked=len(proposals),by_marketplace={m:sum(p['marketplace']==m for p in proposals) for m in markets})
+
+
+@router.get('/OZON/auto-preview')
+def ozon_auto_preview(request: Request, db: Session = Depends(get_db)):
+    owner(request)
+    from backend.services.unified_catalog_sync_23 import configured_markets
+    if 'OZON' not in configured_markets(db)[0]:
+        raise HTTPException(409, 'Ozon выключен или API-ключи не настроены')
+    method = _setting_view(_setting(db, org_id(db)))['match_by']
+    try:
+        rows = read_marketplace(db, 'OZON')
+        proposals, excluded = safe_bulk_candidates(db, rows, method)
+    except Exception as exc:
+        log.exception('OZON_AUTO_PREVIEW_FAILED')
+        raise HTTPException(502, 'Не удалось получить и проверить карточки Ozon') from exc
+    return {'match_by':method, 'total':len(rows), 'proposals':proposals, 'excluded':excluded,
+            'fingerprint':bulk_fingerprint(proposals,method), 'read_only':True}
+
+
+@router.post('/OZON/auto-apply')
+def ozon_auto_apply(payload: AutoApplyInput, request: Request, db: Session = Depends(get_db)):
+    """Owner-authorized and fingerprint-verified ALL safe Ozon proposals, one transaction."""
+    owner(request)
+    from backend.services.unified_catalog_sync_23 import configured_markets
+    if 'OZON' not in configured_markets(db)[0]:
+        raise HTTPException(409, 'Ozon выключен или API-ключи не настроены')
+    oid = org_id(db)
+    method = _setting_view(_setting(db, oid))['match_by']
+    if method != payload.match_by or method not in ('ARTICLE', 'BARCODE'):
+        raise HTTPException(409, 'Правило сопоставления изменилось')
+    try:
+        fresh = read_marketplace(db, 'OZON')
+    except Exception as exc:
+        log.exception('OZON_AUTO_APPLY_READ_FAILED')
+        raise HTTPException(502, 'Не удалось перепроверить Ozon') from exc
+    proposals, excluded = safe_bulk_candidates(db, fresh, method)
+    if bulk_fingerprint(proposals, method) != payload.fingerprint:
+        raise HTTPException(409, 'Карточки изменились, обновите предварительную сверку')
+    if not proposals:
+        raise HTTPException(409, 'Нет однозначных карточек для подтверждения')
+    if len(proposals) > 5000:
+        raise HTTPException(422, 'Слишком много совпадений: разбейте операцию на части')
+    try:
+        for item in proposals:
+            master = db.query(MasterProduct).filter(MasterProduct.organization_id == oid,
+                MasterProduct.id == item['master_id']).with_for_update().first()
+            if master is None or (method == 'ARTICLE' and master.seller_article != item['article']):
+                raise HTTPException(409, 'Каталог изменился: повторите сверку')
+            existing = db.query(MarketplaceCatalogCard).filter(
+                MarketplaceCatalogCard.organization_id == oid,
+                MarketplaceCatalogCard.marketplace == 'OZON',
+                MarketplaceCatalogCard.external_id == item['external_id']).with_for_update().first()
+            collision = db.query(MarketplaceCatalogCard).filter(
+                MarketplaceCatalogCard.organization_id == oid,
+                MarketplaceCatalogCard.marketplace == 'OZON',
+                MarketplaceCatalogCard.seller_article == item['article'],
+                MarketplaceCatalogCard.external_id != item['external_id']).first()
+            if existing or collision:
+                raise HTTPException(409, 'Возник конфликт карточек Ozon: повторите сверку')
+            db.add(MarketplaceCatalogCard(organization_id=oid, marketplace='OZON',
+                external_id=item['external_id'], seller_article=item['article'],
+                master_id=master.id, title=item['remote_name'],
+                barcode=(item['barcodes'] or [None])[0],
+                platform_ids_json=json.dumps(item['platform_ids'],ensure_ascii=False),
+                **(item['dimensions'] or {})))
+            for bc in dict.fromkeys(item['barcodes']):
+                if bc:
+                    db.add(MarketplaceProductBarcode(organization_id=oid, master_id=master.id,
+                        marketplace='OZON', external_id=item['external_id'], barcode=bc))
+        db.commit()
+    except IntegrityError as exc:
+        db.rollback()
+        raise HTTPException(409, 'Уникальность связей нарушена; все изменения отменены') from exc
+    except Exception:
+        db.rollback()
+        raise
+    return {'status':'ok','linked':len(proposals),'excluded':len(excluded),'marketplace':'OZON'}
+
+
+@router.post('/sync-connected')
+def sync_connected(request: Request, db: Session = Depends(get_db)):
+    """Explicit sync of enabled/configured MPs. Snapshots only, no imports."""
+    owner(request)
+    from backend.services.unified_catalog_sync_23 import sync_connected_catalogs
+    result = sync_connected_catalogs(db, organization_id=org_id(db))
+    if any(x['status'] == 'ERROR' for x in result['marketplaces']):
+        log.warning('CATALOG_UNIFIED_SYNC_PARTIAL_FAILURE')
+    return result
 
 
 @router.get('/{marketplace}/preview')
@@ -101,8 +468,168 @@ def preview(marketplace: str, request: Request, db: Session = Depends(get_db)):
         log.exception('CATALOG_IMPORT_PREVIEW_FAILED market=%s', marketplace)
         raise HTTPException(502, 'Marketplace catalog request failed; check backend logs') from exc
     summary = {x: sum(row['status'] == x for row in rows) for x in ('LINKED','MATCH','NEW','CONFLICT')}
+    barcode_summary = ({k: sum(r.get('barcode_check') == k for r in rows) for k in
+                        ('SAME', 'DIFFERENT', 'MISSING_IN_CATALOG', 'MISSING_ON_OZON', 'UNRESOLVED')}
+                       if marketplace == 'OZON' else None)
+    dimension_summary = ({k:sum(row.get('dimension_check') == k for row in rows) for k in
+                          ('SAME','DIFFERENT','CATALOG_MISSING','OZON_MISSING','OZON_API_ERROR','UNRESOLVED')}
+                         if marketplace == 'OZON' else None)
     return {'marketplace': marketplace, 'total': len(rows), 'summary': summary, 'items': rows,
-            'read_only': True}
+            'barcode_summary': barcode_summary, 'dimension_summary': dimension_summary, 'read_only': True}
+
+
+def _ozon_safe_candidates(rows):
+    """Only unique remote articles matching one catalog item; never match by barcode."""
+    articles = {}
+    for row in rows:
+        if row['marketplace'] == 'OZON':
+            articles[row['article']] = articles.get(row['article'], 0) + 1
+    return [r for r in rows if r['marketplace'] == 'OZON'
+            and articles.get(r['article']) == 1
+            and r['status'] == 'MATCH' and r['suggested_master_id'] is not None
+            and r['master_id'] == r['suggested_master_id']]
+
+
+def _ozon_fingerprint(rows):
+    payload = [{'external_id': r['external_id'], 'article': r['article'],
+                'master_id': r['master_id'], 'barcodes': sorted(set(r.get('barcodes') or [])),
+                'sku': (r.get('platform_ids') or {}).get('sku')}
+               for r in sorted(rows, key=lambda x: x['external_id'])]
+    return hashlib.sha256(json.dumps(payload, sort_keys=True, ensure_ascii=False).encode('utf-8')).hexdigest()
+
+
+@router.get('/OZON/link-preview')
+def ozon_link_preview(request: Request, db: Session = Depends(get_db)):
+    """Read-only Ozon linking proposal. No writes and no automatic selections."""
+    owner(request)
+    try:
+        rows = classify(db, read_marketplace(db, 'OZON'))
+    except Exception as exc:
+        log.exception('OZON_LINK_PREVIEW_FAILED')
+        raise HTTPException(502, 'Не удалось получить карточки Ozon') from exc
+    proposals = _ozon_safe_candidates(rows)
+    excluded = [{'external_id': r['external_id'], 'article': r['article'],
+                 'status': r['status'], 'reason': r.get('conflict_reason')}
+                for r in rows if r not in proposals]
+    return {'total': len(rows), 'proposals': proposals, 'excluded': excluded,
+            'fingerprint': _ozon_fingerprint(proposals), 'read_only': True}
+
+
+class OzonLinkSelected(BaseModel):
+    external_id: str
+    article: str
+    master_id: int
+
+
+class OzonLinkBatch(BaseModel):
+    fingerprint: str
+    items: list[OzonLinkSelected]
+
+
+@router.post('/OZON/link-batch')
+def ozon_link_batch(payload: OzonLinkBatch, request: Request, db: Session = Depends(get_db)):
+    """Atomic, explicitly selected Ozon matches. Never edits master products."""
+    owner(request)
+    if not 1 <= len(payload.items) <= 200:
+        raise HTTPException(422, 'Выберите от 1 до 200 карточек')
+    ids = [x.external_id for x in payload.items]
+    if len(ids) != len(set(ids)):
+        raise HTTPException(422, 'Повторяются идентификаторы Ozon')
+    try:
+        fresh = classify(db, read_marketplace(db, 'OZON'))
+    except Exception as exc:
+        log.exception('OZON_LINK_VERIFY_FAILED')
+        raise HTTPException(502, 'Не удалось повторно проверить карточки Ozon') from exc
+    eligible = _ozon_safe_candidates(fresh)
+    if _ozon_fingerprint(eligible) != payload.fingerprint:
+        raise HTTPException(409, 'Данные изменились. Повторите предварительную сверку.')
+    lookup = {r['external_id']: r for r in eligible}
+    oid = org_id(db)
+    try:
+        for item in payload.items:
+            row = lookup.get(item.external_id)
+            if not row or row['article'] != item.article or row['master_id'] != item.master_id:
+                raise HTTPException(409, f'{item.article}: сопоставление изменилось; обновите сверку')
+            master = db.query(MasterProduct).filter(MasterProduct.id == item.master_id,
+                       MasterProduct.organization_id == oid).with_for_update().first()
+            if not master or master.seller_article != item.article:
+                raise HTTPException(409, f'{item.article}: товар каталога изменился')
+            # Recheck identity uniqueness under the transaction; DB unique key is final guard.
+            previous = db.query(MarketplaceCatalogCard).filter(
+                MarketplaceCatalogCard.organization_id == oid,
+                MarketplaceCatalogCard.marketplace == 'OZON',
+                MarketplaceCatalogCard.external_id == item.external_id).with_for_update().first()
+            collision = db.query(MarketplaceCatalogCard).filter(
+                MarketplaceCatalogCard.organization_id == oid,
+                MarketplaceCatalogCard.marketplace == 'OZON',
+                MarketplaceCatalogCard.seller_article == item.article,
+                MarketplaceCatalogCard.external_id != item.external_id).first()
+            if previous or collision:
+                raise HTTPException(409, f'{item.article}: связь уже существует или возник конфликт')
+            db.add(MarketplaceCatalogCard(
+                organization_id=oid, marketplace='OZON', external_id=item.external_id,
+                seller_article=item.article, master_id=master.id, title=row['name'],
+                barcode=(row.get('barcodes') or [None])[0],
+                platform_ids_json=json.dumps(row['platform_ids'], ensure_ascii=False),
+                **(row.get('dimensions') or {})))
+            for barcode in dict.fromkeys(row.get('barcodes') or []):
+                if barcode:
+                    db.add(MarketplaceProductBarcode(
+                        organization_id=oid, master_id=master.id, marketplace='OZON',
+                        external_id=item.external_id, barcode=barcode))
+        db.commit()
+        return {'status': 'ok', 'linked': len(payload.items), 'marketplace': 'OZON'}
+    except IntegrityError as exc:
+        db.rollback()
+        raise HTTPException(409, 'Конфликт связей или штрихкодов, изменения отменены') from exc
+    except Exception:
+        db.rollback()
+        raise
+
+
+class DimensionDecisionInput(BaseModel):
+    marketplace: str
+    external_id: str
+    master_id: int
+    issue_code: str
+    fingerprint: str
+    decision: str
+
+
+@router.post('/dimension-decision')
+def set_dimension_decision(payload: DimensionDecisionInput, request: Request, db: Session = Depends(get_db)):
+    """Record one explicit decision on a confirmed card. No MP/catalog attributes written."""
+    user = owner(request)
+    from backend.services.catalog_dimension_issues_25 import list_snapshot_attention
+    from backend.models.marketplace_dimension_decision import MarketplaceDimensionDecision
+    if payload.decision not in {'DISPUTED', 'ACCEPTED'}:
+        raise HTTPException(422, 'Неизвестное решение')
+    if payload.marketplace not in MARKETS or payload.issue_code not in {'DIFFERENT', 'MARKETPLACE_MISSING', 'CATALOG_MISSING'}:
+        raise HTTPException(422, 'Неизвестная проблема')
+    oid = org_id(db)
+    # Lock the master to prevent simultaneous changes to catalog dimensions.
+    master = db.query(MasterProduct).filter(MasterProduct.organization_id == oid,
+                 MasterProduct.id == payload.master_id).with_for_update().first()
+    if master is None:
+        raise HTTPException(404, 'Товар не найден')
+    issues = list_snapshot_attention(db, oid)
+    match = next((r for r in issues if r['confirmed'] and r['master_id'] == payload.master_id
+                  and r['marketplace'] == payload.marketplace
+                  and r['external_id'] == payload.external_id), None)
+    problem = next((p for p in (match or {}).get('problems', [])
+                    if p['code'] == payload.issue_code and p.get('fingerprint') == payload.fingerprint), None)
+    if not problem:
+        raise HTTPException(409, 'Связь или габариты изменились. Обновите список проблем.')
+    # This table is append-only: repeated approvals are traceable.
+    db.add(MarketplaceDimensionDecision(
+        organization_id=oid, marketplace=payload.marketplace,
+        external_id=payload.external_id, master_id=payload.master_id,
+        issue_code=payload.issue_code, fingerprint=payload.fingerprint,
+        decision=payload.decision, actor_user_id=user.id,
+        catalog_cm_json=json.dumps(match['catalog_cm']),
+        marketplace_cm_json=json.dumps(match['marketplace_cm'])))
+    db.commit()
+    return {'status': 'ok', 'decision': payload.decision}
 
 
 class ImportOne(BaseModel):
@@ -328,8 +855,14 @@ def product_cards(master_id: int, request: Request, db: Session = Depends(get_db
     if not master:
         raise HTTPException(404, 'Product not found')
     linked = db.query(MarketplaceCatalogCard).filter(MarketplaceCatalogCard.master_id == master_id).all()
+    saved_barcodes = db.query(MarketplaceProductBarcode).filter(
+        MarketplaceProductBarcode.master_id == master_id).all()
+    barcode_by_card = {}
+    for b in saved_barcodes:
+        barcode_by_card.setdefault((b.marketplace, b.external_id), []).append(b.barcode)
     result = [{'marketplace':x.marketplace, 'external_id':x.external_id,
              'seller_article':x.seller_article, 'title':x.title, 'barcode':x.barcode,
+             'barcodes': barcode_by_card.get((x.marketplace, x.external_id), [x.barcode] if x.barcode else []),
              'dimensions': {name:float(getattr(x, name)) for name in ('length_cm','width_cm','height_cm')}
                  if all(getattr(x, name) is not None for name in ('length_cm','width_cm','height_cm')) else None,
              'platform_ids':json.loads(x.platform_ids_json or '{}')} for x in linked]
@@ -343,5 +876,6 @@ def product_cards(master_id: int, request: Request, db: Session = Depends(get_db
                        'seller_article':w.current_article,
                        'title':local.name if local else None,
                        'barcode':local.barcode if local else None,
+                       'barcodes': [local.barcode] if local and local.barcode else [],
                        'dimensions':None, 'platform_ids':{'nmID':w.nm_id}})
     return result

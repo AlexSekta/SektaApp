@@ -69,7 +69,9 @@ def sync_day(day: date = Query(...), request: Request = None, db: Session = Depe
     org = getattr(request.state, 'organization_id', None)
     if not org:
         raise HTTPException(401, 'Необходима авторизация')
-    totals, products = fetch_one_day(db, day)
+    # Share the Funnel API rate budget with background live/history workers.
+    from backend.services.wb_sales_funnel_throttle import fetch_throttled
+    totals, products = fetch_throttled(fetch_one_day, db, day)
     record = db.query(WBSalesDaily).filter_by(organization_id=org, sale_date=day).one_or_none()
     if record is None:
         record = WBSalesDaily(organization_id=org, sale_date=day)

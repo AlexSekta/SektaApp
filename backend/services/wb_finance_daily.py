@@ -3,6 +3,7 @@ import logging
 from datetime import date, timedelta
 from decimal import Decimal
 from sqlalchemy import text
+from backend.services.wb_finance_doc_type_32 import signed
 from backend.services import wb_finance_worker as weekly
 
 log = logging.getLogger('wb_finance_daily')
@@ -60,21 +61,22 @@ def work_one(org, rid):
             fields={'o':org,'r':rid,'id':int(r['rrdId']),'nm':str(r.get('nmId') or '') or None,
                 'v':str(r.get('vendorCode') or '') or None,'sku':str(r.get('sku') or '') or None,
                 'srid':str(r.get('srid') or '') or None,
-                'oper':str(r.get('sellerOperName') or '')[:250],
+                'oper':str(r.get('sellerOperName') or '')[:250], 'doc_type':str(r.get('docTypeName') or '')[:100] or None,
                 'reason':str(r.get('bonusTypeName') or r.get('sellerOperName') or r.get('docTypeName') or 'Не указано')[:500]}
             for param,key in [('ret','retailAmount'),('pay','forPay'),('commission','ppvzSalesCommission'),
                 ('vat','vwNds'),('acquiring','acquiringFee'),('logistics','deliveryService'),
                 ('storage','paidStorage'),('acceptance','paidAcceptance'),('penalty','penalty'),
                 ('deduction','deduction'),('additional','additionalPayment')]: fields[param]=money(r.get(key))
             db.execute(text('''INSERT INTO wb_finance_daily_entries
-            (organization_id,report_id,rrd_id,nm_id,vendor_code,sku,srid,operation,reason,retail,for_pay,commission,vat,acquiring,logistics,storage,acceptance,penalty,deduction,additional_payment)
-            VALUES (:o,:r,:id,:nm,:v,:sku,:srid,:oper,:reason,:ret,:pay,:commission,:vat,:acquiring,:logistics,:storage,:acceptance,:penalty,:deduction,:additional)
-            ON CONFLICT (organization_id,report_id,rrd_id) DO NOTHING'''),fields)
+            (organization_id,report_id,rrd_id,nm_id,vendor_code,sku,srid,operation,doc_type,reason,retail,for_pay,commission,vat,acquiring,logistics,storage,acceptance,penalty,deduction,additional_payment)
+            VALUES (:o,:r,:id,:nm,:v,:sku,:srid,:oper,:doc_type,:reason,:ret,:pay,:commission,:vat,:acquiring,:logistics,:storage,:acceptance,:penalty,:deduction,:additional)
+            ON CONFLICT (organization_id,report_id,rrd_id) DO UPDATE SET
+              doc_type=COALESCE(EXCLUDED.doc_type,wb_finance_daily_entries.doc_type)'''),fields)
         # WB detail expresses returns as positive magnitudes, while report totals
         # subtract them. Preserve the original source rows and sign them only in totals.
-        sums=db.execute(text('''SELECT count(*),
-          coalesce(sum(CASE WHEN lower(btrim(operation))='возврат' THEN -retail ELSE retail END),0),
-          coalesce(sum(CASE WHEN lower(btrim(operation))='возврат' THEN -for_pay ELSE for_pay END),0),
+        sums=db.execute(text(f'''SELECT count(*),
+          coalesce(sum({signed('retail')}),0),
+          coalesce(sum({signed('for_pay')}),0),
           coalesce(sum(logistics),0),coalesce(sum(penalty),0),coalesce(sum(deduction),0)
         FROM wb_finance_daily_entries WHERE organization_id=:o AND report_id=:r'''),{'o':org,'r':rid}).first()
         if len(data)<1000:
@@ -87,13 +89,15 @@ def work_one(org, rid):
         db.execute(text('''UPDATE wb_finance_daily_reports SET cursor_rrd=:c,loaded_rows=:n,status=:s,last_error=:e,updated_at=now()
         WHERE organization_id=:o AND report_id=:r'''),{'c':max(ids) if ids else cursor,'n':sums[0],'s':status,'e':err,'o':org,'r':rid})
         db.commit()
+        weekly.retry35.record_result('daily',org,rid,status)
         log.info('WB_DAILY_PAGE_OK org=%s report=%s rows=%s total=%s status=%s',org,rid,len(data),sums[0],status)
     except Exception as exc:
         db.rollback()
         db.execute(text('''UPDATE wb_finance_daily_reports SET status='retry',last_error=:e,updated_at=now()
         WHERE organization_id=:o AND report_id=:r'''),{'e':type(exc).__name__,'o':org,'r':rid})
         db.commit()
-        log.warning('WB_DAILY_PAGE_RETRY org=%s report=%s error=%s',org,rid,type(exc).__name__)
+        delay=weekly.retry35.record_result('daily',org,rid,'retry')
+        log.warning('WB_DAILY_PAGE_RETRY org=%s report=%s error=%s retry_seconds=%s',org,rid,type(exc).__name__,delay)
     finally: weekly.close(db)
 
 def next_report(org):

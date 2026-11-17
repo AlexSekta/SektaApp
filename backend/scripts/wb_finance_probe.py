@@ -27,12 +27,16 @@ def amount(value):
         return Decimal(0)
 
 
-def post_finance(token, path, payload):
+def post_finance(token, path, payload, *, diagnostic_report_id=None, timeout=(15, 75)):
     try:
-        resp = requests.post(urljoin(HOST, path), headers={'Authorization': token, 'Content-Type': 'application/json'}, json=payload, timeout=(15, 75), allow_redirects=False)
+        resp = requests.post(urljoin(HOST, path), headers={'Authorization': token, 'Content-Type': 'application/json'}, json=payload, timeout=timeout, allow_redirects=False)
     except requests.RequestException as err:
+        if diagnostic_report_id is not None:
+            print(f'WB_FINANCE_HTTP_DIAG report={diagnostic_report_id} status=NETWORK_ERROR error={type(err).__name__}')
         print(f'WB_FINANCE_NETWORK_ERROR type={type(err).__name__}')
         return None
+    if diagnostic_report_id is not None:
+        print(f'WB_FINANCE_HTTP_DIAG report={diagnostic_report_id} status={resp.status_code}')
     print(f'WB_FINANCE_HTTP status={resp.status_code}')
     if resp.status_code == 204:
         print('WB_FINANCE_NO_DATA')

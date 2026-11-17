@@ -102,6 +102,7 @@ from backend.api.payouts_dashboard import router as payouts_dashboard_router
 from backend.api.wb_finance_reports import router as wb_finance_reports_router
 from backend.api.penalties_dashboard import router as penalties_dashboard_router
 from backend.services.wb_finance_worker import start_wb_finance_worker, stop_wb_finance_worker
+from backend.services.wb_finance_doc_type_32 import ensure_wb_finance_doc_type_schema
 
 from backend.services.wb_unit_economy_cache_59_4 import ensure_schema as ensure_wb_unit_schema, start_scheduler as start_wb_unit_scheduler, stop_scheduler as stop_wb_unit_scheduler
 
@@ -232,6 +233,7 @@ def backend_startup():
     ensure_wb_sales_history_schema()
     start_wb_sales_history_scheduler()
     start_wb_sales_live_scheduler()
+    ensure_wb_finance_doc_type_schema()
     start_wb_finance_worker()
     verify_yandex_sales_schema()
     verify_yandex_sales_history_schema()

@@ -22,6 +22,7 @@ class MasterProduct(Base):
     seller_article = Column(String(128), nullable=False, index=True)
     barcode = Column(String(64), nullable=True, index=True)
     name = Column(String, nullable=True)
+    internal_name = Column(String, nullable=True)
 
     # Старое поле: используется как группа/склад 1С.
     group = Column(String, nullable=False, default="Маркетплейс")

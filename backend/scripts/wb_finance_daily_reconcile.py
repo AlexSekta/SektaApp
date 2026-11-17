@@ -5,6 +5,7 @@ Usage: python -m backend.scripts.wb_finance_daily_reconcile --org 2
 import argparse
 from decimal import Decimal
 from sqlalchemy import text
+from backend.services.wb_finance_doc_type_32 import signed
 from backend.services import wb_finance_worker as weekly
 
 
@@ -17,9 +18,9 @@ def run(org: int):
           FROM wb_finance_daily_reports WHERE organization_id=:o AND status='mismatch'
           ORDER BY report_date DESC, report_id"""), {'o': org}).mappings().all()
         for r in reports:
-            totals = db.execute(text("""SELECT count(*) AS n,
-                coalesce(sum(CASE WHEN lower(btrim(operation))='возврат' THEN -retail ELSE retail END),0) AS retail,
-                coalesce(sum(CASE WHEN lower(btrim(operation))='возврат' THEN -for_pay ELSE for_pay END),0) AS for_pay,
+            totals = db.execute(text(f"""SELECT count(*) AS n,
+                coalesce(sum({signed('retail')}),0) AS retail,
+                coalesce(sum({signed('for_pay')}),0) AS for_pay,
                 coalesce(sum(logistics),0) AS logistics,
                 coalesce(sum(penalty),0) AS penalty,
                 coalesce(sum(deduction),0) AS deduction
