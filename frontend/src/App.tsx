@@ -19,6 +19,7 @@ import MasterProducts from "./MasterProducts";
 import Stocks from "./Stocks";
 
 import Registry from "./Registry";
+import Orders from "./Orders";
 
 import Analytics from "./Analytics";
 import WeeklyReport from "./WeeklyReport";
@@ -80,6 +81,8 @@ function App() {
           />
 
 
+
+          <Route path="orders" element={<Orders />} />
 
           <Route
             path="registry"

@@ -31,6 +31,7 @@ from backend.api.marketplace_catalog_import import router as marketplace_catalog
 from backend.api.wb_unit_economy_59_3 import router as wb_unit_economy_router
 from backend.api.registry import router as registry_router
 from backend.api.ozon import router as ozon_router
+from backend.api.fbs_orders_47 import router as fbs_orders_router
 from backend.api.ozon_reviews import router as ozon_reviews_router
 
 from backend.api.yandex import router as yandex_router
@@ -66,6 +67,7 @@ from backend.services.ozon_order_sync import ensure_ozon_order_tables
 from backend.services.ozon_event_sync import ensure_event_tables
 from backend.services.ozon_event_scheduler import start_ozon_event_scheduler, stop_ozon_event_scheduler
 from backend.services.ozon_order_scheduler import start_ozon_order_scheduler, stop_ozon_order_scheduler
+from backend.services.ozon_fbs_sticker_monitor_43 import start as start_ozon_fbs_sticker_monitor, stop as stop_ozon_fbs_sticker_monitor
 from backend.services.ozon_order_history_scheduler import (verify_ozon_order_history_schema, start_ozon_order_history_scheduler, stop_ozon_order_history_scheduler)
 from backend.services.ozon_sales_history_scheduler import verify_ozon_sales_history_schema, start_ozon_sales_history_scheduler, stop_ozon_sales_history_scheduler
 from backend.services.ozon_sales_scheduler import (
@@ -221,6 +223,7 @@ def backend_startup():
     start_ozon_sales_history_scheduler()
     ensure_ozon_order_tables()
     start_ozon_order_scheduler()
+    start_ozon_fbs_sticker_monitor()
     verify_ozon_order_history_schema()
     start_ozon_order_history_scheduler()
     ensure_event_tables()
@@ -259,6 +262,7 @@ def backend_shutdown():
     stop_ozon_finance_scheduler()
     stop_ozon_sales_scheduler()
     stop_ozon_order_scheduler()
+    stop_ozon_fbs_sticker_monitor()
     stop_ozon_order_history_scheduler()
     stop_ozon_event_scheduler()
     logger.info("BACKEND_STOP")
@@ -293,6 +297,7 @@ app.include_router(stock_view_settings_router)
 app.include_router(sync_status_router)
 app.include_router(wb_finance_reports_router)
 app.include_router(ozon_finance_56_router)
+app.include_router(fbs_orders_router)
 app.include_router(wb_unit_economy_router)
 app.include_router(payouts_dashboard_router)
 app.include_router(penalties_dashboard_router)
