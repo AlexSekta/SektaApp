@@ -172,6 +172,8 @@ function Layout() {
           </Link>
 
 
+          <Link to="/orders" className={location.pathname === "/orders" ? "active" : ""}>Заказы</Link>
+
           <div className={location.pathname === "/registry" || location.pathname === "/stocks" ? "nav-analytics-group active" : "nav-analytics-group"}>
             <Link
               to="/registry"
