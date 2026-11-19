@@ -39,6 +39,13 @@ PDF_INTERVAL = max(60, int(os.getenv('OZON_FBS_PDF_INTERVAL_SECONDS', '120')))
 # PDF flow is opt-in; start with at most two jobs per cycle to avoid API bursts.
 PDF_ACTIONS = max(1, min(8, int(os.getenv('OZON_FBS_PDF_ACTIONS_PER_CYCLE', '2'))))
 API_GAP = max(0.2, float(os.getenv('OZON_FBS_API_MIN_GAP_SECONDS', '0.8')))
+# Limited read-only refresh for orders that have aged out of the list window.
+STATUS_REFRESH_ENABLED = os.getenv('OZON_FBS_STATUS_REFRESH_ENABLED', 'true').lower() in ('1', 'true', 'yes')
+STATUS_REFRESH_INTERVAL = max(60, int(os.getenv('OZON_FBS_STATUS_REFRESH_INTERVAL_SECONDS', '60')))
+STATUS_REFRESH_READY_PER_CYCLE = max(1, min(30, int(os.getenv('OZON_FBS_STATUS_REFRESH_READY_PER_CYCLE', '8'))))
+STATUS_REFRESH_NEW_PER_CYCLE = max(0, min(10, int(os.getenv('OZON_FBS_STATUS_REFRESH_NEW_PER_CYCLE', '3'))))
+# Only an explicit HTTP 429 response allows a bounded retry of a create request.
+CREATE_429_MAX_RETRIES = max(0, min(5, int(os.getenv('OZON_FBS_CREATE_429_MAX_RETRIES', '3'))))
 
 
 def paced(call):
@@ -89,7 +96,11 @@ def ensure_schema():
             'scanit_checked_at TIMESTAMPTZ', 'scanit_next_attempt_at TIMESTAMPTZ',
             'scanit_attempts INTEGER NOT NULL DEFAULT 0', 'scanit_error VARCHAR(200)',
             'ozon_created_at TIMESTAMPTZ', 'ready_detected_at TIMESTAMPTZ',
-            'ready_from_new BOOLEAN NOT NULL DEFAULT false'
+            'ready_from_new BOOLEAN NOT NULL DEFAULT false',
+            'label_create_429_retries INTEGER NOT NULL DEFAULT 0',
+            'status_verified_at TIMESTAMPTZ',
+            'status_next_attempt_at TIMESTAMPTZ',
+            'status_check_error VARCHAR(100)'
         ):
             conn.execute(text('ALTER TABLE ozon_fbs_sticker_archive ADD COLUMN IF NOT EXISTS ' + col))
         conn.execute(text('''CREATE TABLE IF NOT EXISTS ozon_fbs_label_settings (
@@ -105,6 +116,7 @@ def ensure_schema():
         conn.execute(text('''CREATE POLICY tenant_isolation ON ozon_fbs_label_settings
             USING (organization_id = NULLIF(current_setting('app.organization_id',true),'')::integer)
             WITH CHECK (organization_id = NULLIF(current_setting('app.organization_id',true),'')::integer)'''))
+        conn.execute(text('CREATE INDEX IF NOT EXISTS ix_ozon_fbs_status_refresh ON ozon_fbs_sticker_archive (organization_id, status, status_verified_at)'))
         conn.execute(text('CREATE INDEX IF NOT EXISTS ix_ozon_fbs_scanit_pending ON ozon_fbs_sticker_archive (organization_id, scanit_next_attempt_at, first_seen_at)'))
         conn.execute(text('CREATE INDEX IF NOT EXISTS ix_ozon_fbs_archive_pending ON ozon_fbs_sticker_archive (organization_id, sticker_saved_at, label_next_attempt_at)'))
         conn.execute(text('GRANT SELECT,INSERT,UPDATE,DELETE ON ozon_fbs_sticker_archive TO marketplace_app'))
@@ -245,12 +257,12 @@ def persist_postings(db, org, postings):
     for number, item in postings.items():
         status = str(item.get('status') or '')
         db.execute(text("""INSERT INTO ozon_fbs_sticker_archive
-              (organization_id,posting_number,order_number,status,scanit,ozon_created_at)
-              VALUES (:org,:no,:order,:status,:scanit,:created)
+              (organization_id,posting_number,order_number,status,scanit,ozon_created_at,ready_detected_at)
+              VALUES (:org,:no,:order,:status,:scanit,:created,
+                      CASE WHEN :status='awaiting_deliver' THEN now() ELSE NULL END)
               ON CONFLICT (organization_id,posting_number) DO UPDATE SET
               ready_detected_at=CASE
-                WHEN ozon_fbs_sticker_archive.status IN ('awaiting_packaging','awaiting_registration','acceptance_in_progress')
-                  AND EXCLUDED.status='awaiting_deliver'
+                WHEN EXCLUDED.status='awaiting_deliver'
                   AND ozon_fbs_sticker_archive.ready_detected_at IS NULL
                 THEN now() ELSE ozon_fbs_sticker_archive.ready_detected_at END,
               ready_from_new=CASE
@@ -264,7 +276,7 @@ def persist_postings(db, org, postings):
               last_seen_at=now()"""), {
             'org': org, 'no': number, 'order': str(item.get('order_number') or ''),
             'status': status, 'scanit': str(item.get('scanit') or ''),
-            'created': parse_ozon_created(item.get('created_at')),
+            'created': parse_ozon_created(item.get('in_process_at') or item.get('created_at')),
         })
     db.commit()
 
@@ -305,13 +317,13 @@ def save_identifiers(db, org, item):
     # Atomic idempotent upsert.
     db.execute(text('''INSERT INTO ozon_fbs_sticker_archive
         (organization_id, posting_number, order_number, status, scanit,
-         upper_barcode, lower_barcode, scanit_checked_at)
-        VALUES (:org,:no,:order,:status,:scanit,:upper,:lower,now())
+         upper_barcode, lower_barcode, scanit_checked_at,ready_detected_at)
+        VALUES (:org,:no,:order,:status,:scanit,:upper,:lower,now(),
+                CASE WHEN :status='awaiting_deliver' THEN now() ELSE NULL END)
         ON CONFLICT (organization_id,posting_number) DO UPDATE SET
           order_number=COALESCE(NULLIF(EXCLUDED.order_number,''),ozon_fbs_sticker_archive.order_number),
           ready_detected_at=CASE
-            WHEN ozon_fbs_sticker_archive.status IN ('awaiting_packaging','awaiting_registration','acceptance_in_progress')
-              AND EXCLUDED.status='awaiting_deliver'
+            WHEN EXCLUDED.status='awaiting_deliver'
               AND ozon_fbs_sticker_archive.ready_detected_at IS NULL
             THEN now() ELSE ozon_fbs_sticker_archive.ready_detected_at END,
           ready_from_new=CASE
@@ -340,12 +352,31 @@ def scanit_backoff(db, org, number, error):
     db.commit()
 
 
+def missing_scanit_action(status):
+    """Missing scanit is not an API failure."""
+    return 'retry' if status == 'awaiting_deliver' else 'skip'
+
+
+def scanit_not_available(db, org, number, status):
+    """Keep retrying only active ready orders with a bounded backoff."""
+    if missing_scanit_action(status) == 'retry':
+        scanit_backoff(db, org, number, 'scanit_empty_awaiting_deliver')
+        return
+    db.execute(text("""UPDATE ozon_fbs_sticker_archive SET
+        scanit_error=NULL, scanit_next_attempt_at=NULL
+        WHERE organization_id=:org AND posting_number=:no"""),
+        {'org': org, 'no': number})
+    db.commit()
+
+
 def collect_missing_identifiers(db, org, client, limit=DETAILS_PER_CYCLE):
-    # Independent durable queue.
-    rows = db.execute(text('''SELECT posting_number FROM ozon_fbs_sticker_archive
-        WHERE organization_id=:org AND (scanit IS NULL OR scanit='')
+    # Listing/status refresh independently catches new -> ready transitions.
+    # Do not poll new or cancelled postings for an identifier they lack.
+    rows = db.execute(text("""SELECT posting_number FROM ozon_fbs_sticker_archive
+        WHERE organization_id=:org AND status='awaiting_deliver'
+          AND (scanit IS NULL OR scanit='')
           AND (scanit_next_attempt_at IS NULL OR scanit_next_attempt_at<=now())
-        ORDER BY first_seen_at DESC LIMIT :limit'''),
+        ORDER BY first_seen_at DESC LIMIT :limit"""),
         {'org':org,'limit':limit}).mappings().all()
     saved = 0
     for row in rows:
@@ -354,15 +385,20 @@ def collect_missing_identifiers(db, org, client, limit=DETAILS_PER_CYCLE):
         number = row['posting_number']
         try:
             data = detail_posting(client, number)
-            if not data['scanit']:
-                raise ValueError('scanit not yet available')
+            # Preserve actual barcodes/status even when scanit is empty.
             save_identifiers(db, org, data)
-            saved += 1
-            log.info('OZON_FBS_SCANIT_SAVED org=%s posting=%s',org,number)
+            if not data['scanit']:
+                scanit_not_available(db, org, number, data['status'])
+                log.info('OZON_FBS_SCANIT_EMPTY org=%s posting=%s status=%s action=%s',
+                         org, number, data['status'], missing_scanit_action(data['status']))
+            else:
+                saved += 1
+                log.info('OZON_FBS_SCANIT_SAVED org=%s posting=%s',org,number)
         except Exception as exc:
             db.rollback()
             scanit_backoff(db,org,number,type(exc).__name__)
-            log.warning('OZON_FBS_SCANIT_RETRY org=%s posting=%s type=%s',org,number,type(exc).__name__)
+            log.warning('OZON_FBS_SCANIT_RETRY org=%s posting=%s type=%s detail=%s',
+                        org,number,type(exc).__name__,str(exc)[:120])
         STOP.wait(0.3)
     return saved
 
@@ -381,35 +417,76 @@ def process_one(db, org, client, posting):
     number = posting['posting_number']
     task_id = posting['label_task_id']
     if task_id is None:
-        # Must be a confirmed new -> awaiting_deliver transition, not historical data.
+        # Ready time is first confirmed observation of awaiting_deliver (not necessarily the actual Ozon transition).
         if not posting.get('eligible_create'):
             log.info('OZON_FBS_PDF_SKIP_NO_TASK org=%s posting=%s', org, number)
             return
-        # One-way guard BEFORE network request: ambiguous network failures must not
-        # trigger repeated create calls. Manual inspection is required on failures.
+        # The claim is committed before the network request. A retry is permitted
+        # only when the previous call returned an explicit 429. Legacy HTTP-429
+        # errors saved by older monitors are recognized without clearing history.
         claimed = db.execute(text("""UPDATE ozon_fbs_sticker_archive
-            SET label_requested_at=now(), label_error='create_requested_unconfirmed',
+            SET label_requested_at=COALESCE(label_requested_at,now()),
+                label_error='create_requested_unconfirmed',
                 label_next_attempt_at=NULL
             WHERE organization_id=:org AND posting_number=:no
-              AND label_task_id IS NULL AND label_requested_at IS NULL
-              AND ready_from_new=true AND status='awaiting_deliver'
+              AND label_task_id IS NULL AND sticker_pdf IS NULL
+              AND (label_next_attempt_at IS NULL OR label_next_attempt_at<=now())
+              AND status='awaiting_deliver'
               AND ready_detected_at IS NOT NULL
+              AND NULLIF(scanit,'') IS NOT NULL
+              AND (
+                label_requested_at IS NULL
+                OR (label_requested_at IS NOT NULL
+                    AND label_error LIKE '%label create HTTP 429%'
+                    AND label_create_429_retries < :max_retries)
+              )
               AND EXISTS (SELECT 1 FROM ozon_fbs_label_settings settings
                 WHERE settings.organization_id=:org AND settings.auto_create_enabled=true
                 AND ready_detected_at + make_interval(mins => settings.delay_minutes) <= now())
-            RETURNING posting_number"""), {'org':org,'no':number}).first()
+            RETURNING posting_number"""),
+            {'org':org,'no':number,'max_retries':CREATE_429_MAX_RETRIES}).first()
         db.commit()
         if not claimed:
             return
         try:
             reply = paced(lambda: client.post_raw('/v3/posting/fbs/package-label/create',
                             {'posting_numbers':[number]}))
-            if reply.get('status_code') != 200:
-                raise RuntimeError(f'label create HTTP {reply.get("status_code")}')
+        except Exception:
+            # A network failure or timeout is ambiguous: leave the one-way claim
+            # in place, preventing all automatic retries.
+            log.warning('OZON_FBS_LABEL_CREATE_UNCONFIRMED org=%s posting=%s',org,number)
+            raise
+        code = reply.get('status_code')
+        if code == 429:
+            # Do not use the normal exception/backoff handler, which would lose
+            # the confirmed-429 marker. Count retries persistently across restarts.
+            result = db.execute(text("""UPDATE ozon_fbs_sticker_archive
+                SET label_create_429_retries=label_create_429_retries+1,
+                    label_attempts=label_attempts+1,
+                    label_error='label create HTTP 429',
+                    label_next_attempt_at=now()+make_interval(secs =>
+                        LEAST(1800, 300 * power(2, LEAST(label_create_429_retries,3))))
+                WHERE organization_id=:org AND posting_number=:no
+                  AND label_task_id IS NULL AND sticker_pdf IS NULL
+                  AND label_error='create_requested_unconfirmed'
+                RETURNING label_create_429_retries"""),
+                {'org':org,'no':number}).first()
+            db.commit()
+            if result is None:
+                log.error('OZON_FBS_LABEL_429_STATE_MISMATCH org=%s posting=%s',org,number)
+                return
+            log.warning('OZON_FBS_LABEL_CREATE_429_RETRY org=%s posting=%s failures=%s limit=%s',
+                        org,number,result[0],CREATE_429_MAX_RETRIES)
+            return
+        if code != 200:
+            # Do not retry other responses automatically (including HTTP 504).
+            log.warning('OZON_FBS_LABEL_CREATE_UNCONFIRMED org=%s posting=%s http=%s',org,number,code)
+            raise RuntimeError(f'label create HTTP {code}')
+        try:
             task_id, task_type = parse_task(reply.get('body'))
         except Exception:
-            # Leave label_requested_at set; never blindly retry creation.
-            log.warning('OZON_FBS_LABEL_CREATE_UNCONFIRMED org=%s posting=%s',org,number)
+            # Even a 200 without a usable task ID is ambiguous.
+            log.warning('OZON_FBS_LABEL_CREATE_UNCONFIRMED org=%s posting=%s parse=failed',org,number)
             raise
         db.execute(text("""UPDATE ozon_fbs_sticker_archive SET
              label_task_id=:task, label_task_type=:type, label_error=NULL,
@@ -481,6 +558,96 @@ def listing_cycle():
         _close_session(db)
 
 
+
+def status_refresh_candidates(db, org, status, limit):
+    """Revisit archived active postings even after they leave list_recent's date window."""
+    # Newer packaging orders need prompt transition detection; old ready orders
+    # need a backfill to remove stale assembly counts.
+    return db.execute(text("""SELECT posting_number FROM ozon_fbs_sticker_archive
+        WHERE organization_id=:org AND status=:status
+          AND (status_next_attempt_at IS NULL OR status_next_attempt_at<=now())
+          AND (status_verified_at IS NULL OR status_verified_at<=now()-interval '5 minutes')
+        ORDER BY status_verified_at ASC NULLS FIRST,
+                 first_seen_at DESC LIMIT :limit"""),
+        {'org':org,'status':status,'limit':limit}).mappings().all()
+
+
+def read_status_detail(client, number):
+    """Only GET details through Ozon's read-only FBS API; never ship/label/create."""
+    from backend.services.ozon_order_sync import retry_ozon_request
+    response = retry_ozon_request(
+        lambda: paced(lambda: client.post_raw('/v3/posting/fbs/get', {
+            'posting_number': number,
+            'with': {'barcodes': False, 'analytics_data': False, 'financial_data': False}
+        })), scheme='fbs', operation='sticker_status_refresh', posting_number=number)
+    if response.get('status_code') != 200:
+        raise RuntimeError('detail HTTP ' + str(response.get('status_code')))
+    body = response.get('body') or {}
+    record = body.get('result') if isinstance(body.get('result'), dict) else body
+    if not isinstance(record, dict) or str(record.get('posting_number') or '') != number:
+        raise ValueError('Ozon status detail posting mismatch')
+    if not str(record.get('status') or ''):
+        raise ValueError('Ozon status detail missing status')
+    return record
+
+
+def refresh_one_status(db, org, client, number):
+    """Commit a confirmed status only; preserve old state if Ozon request fails."""
+    try:
+        record = read_status_detail(client, number)
+        persist_postings(db, org, {number: record})
+        db.execute(text("""UPDATE ozon_fbs_sticker_archive
+            SET status_verified_at=now(), status_next_attempt_at=NULL,
+                status_check_error=NULL
+            WHERE organization_id=:org AND posting_number=:no"""),
+            {'org': org, 'no': number})
+        db.commit()
+        return str(record['status'])
+    except Exception as exc:
+        db.rollback()
+        db.execute(text("""UPDATE ozon_fbs_sticker_archive
+            SET status_next_attempt_at=now()+interval '5 minutes',
+                status_check_error=:error
+            WHERE organization_id=:org AND posting_number=:no"""),
+            {'org': org, 'no': number, 'error': type(exc).__name__})
+        db.commit()
+        log.warning('OZON_FBS_STATUS_REFRESH_RETRY org=%s posting=%s type=%s',
+                    org, number, type(exc).__name__)
+        return None
+
+
+def status_refresh_cycle():
+    if not STATUS_REFRESH_ENABLED:
+        return
+    db, org = _db_session()
+    if db is None:
+        return
+    try:
+        client = get_ozon_client(db)
+        # Prioritize catching new->ready changes while backfilling stale ready.
+        new_rows = status_refresh_candidates(db, org, 'awaiting_packaging', STATUS_REFRESH_NEW_PER_CYCLE) if STATUS_REFRESH_NEW_PER_CYCLE else []
+        ready_rows = status_refresh_candidates(db, org, 'awaiting_deliver', STATUS_REFRESH_READY_PER_CYCLE)
+        checked = changed = 0
+        for row in list(new_rows) + list(ready_rows):
+            if STOP.is_set():
+                break
+            number = row['posting_number']
+            previous = db.execute(text("""SELECT status FROM ozon_fbs_sticker_archive
+                WHERE organization_id=:org AND posting_number=:no"""),
+                {'org':org,'no':number}).scalar()
+            current = refresh_one_status(db, org, client, number)
+            if current is not None:
+                checked += 1
+                if current != previous:
+                    changed += 1
+                    log.info('OZON_FBS_STATUS_CHANGED org=%s posting=%s from=%s to=%s',
+                             org, number, previous, current)
+            STOP.wait(0.2)
+        log.info('OZON_FBS_STATUS_REFRESH_OK org=%s checked=%s changed=%s',
+                 org, checked, changed)
+    finally:
+        _close_session(db)
+
 def identifiers_cycle():
     db, org = _db_session()
     if db is None:
@@ -496,22 +663,26 @@ def pdf_candidates(db, org, limit):
     """Prefer known tasks. Creating new ones requires explicit per-org opt-in."""
     return db.execute(text("""SELECT a.posting_number, a.label_task_id,
       (a.label_task_id IS NULL AND COALESCE(s.auto_create_enabled,false)
-       AND a.ready_from_new=true AND a.status='awaiting_deliver'
+       AND a.status='awaiting_deliver'
        AND a.ready_detected_at IS NOT NULL
        AND a.ready_detected_at + make_interval(mins => COALESCE(s.delay_minutes,20)) <= now()
-       AND a.label_requested_at IS NULL) AS eligible_create
+       AND (a.label_requested_at IS NULL OR
+            (a.label_error LIKE '%label create HTTP 429%'
+             AND a.label_create_429_retries < :max_retries))) AS eligible_create
       FROM ozon_fbs_sticker_archive a
       LEFT JOIN ozon_fbs_label_settings s ON s.organization_id=a.organization_id
       WHERE a.organization_id=:org AND a.sticker_pdf IS NULL
         AND NULLIF(a.scanit,'') IS NOT NULL
         AND (a.label_next_attempt_at IS NULL OR a.label_next_attempt_at<=now())
         AND (a.label_task_id IS NOT NULL OR
-           (COALESCE(s.auto_create_enabled,false) AND a.ready_from_new=true
+           (COALESCE(s.auto_create_enabled,false)
             AND a.status='awaiting_deliver' AND a.ready_detected_at IS NOT NULL
             AND a.ready_detected_at + make_interval(mins => COALESCE(s.delay_minutes,20)) <= now()
-            AND a.label_requested_at IS NULL))
+            AND (a.label_requested_at IS NULL OR
+                 (a.label_error LIKE '%label create HTTP 429%'
+                  AND a.label_create_429_retries < :max_retries))))
       ORDER BY (a.label_task_id IS NOT NULL) DESC, a.first_seen_at DESC
-      LIMIT :limit"""), {'org':org,'limit':limit}).mappings().all()
+      LIMIT :limit"""), {'org':org,'limit':limit,'max_retries':CREATE_429_MAX_RETRIES}).mappings().all()
 
 
 def pdf_cycle():
@@ -545,6 +716,11 @@ def cycle():
             fn()
         except Exception:
             log.exception('OZON_FBS_%s_CYCLE_ERROR', kind.upper())
+    if STATUS_REFRESH_ENABLED:
+        try:
+            status_refresh_cycle()
+        except Exception:
+            log.exception('OZON_FBS_STATUS_REFRESH_CYCLE_ERROR')
     if PDF_ENABLED:
         try:
             pdf_cycle()
@@ -571,6 +747,8 @@ def start():
     STOP.clear()
     workers = [('list', listing_cycle, LIST_INTERVAL),
                ('scanit', identifiers_cycle, SCANIT_INTERVAL)]
+    if STATUS_REFRESH_ENABLED:
+        workers.append(('status', status_refresh_cycle, STATUS_REFRESH_INTERVAL))
     if PDF_ENABLED:
         workers.append(('pdf', pdf_cycle, PDF_INTERVAL))
     for stage, fn, interval in workers:
@@ -579,6 +757,8 @@ def start():
     log.info('OZON_FBS_MONITOR_STARTED list_seconds=%s scanit_seconds=%s '
              'pdf_seconds=%s pdf_actions=%s pdf_enabled=%s',
              LIST_INTERVAL, SCANIT_INTERVAL, PDF_INTERVAL, PDF_ACTIONS, PDF_ENABLED)
+    log.info('OZON_FBS_STATUS_REFRESH_STARTED enabled=%s interval=%s ready_per_cycle=%s new_per_cycle=%s',
+             STATUS_REFRESH_ENABLED, STATUS_REFRESH_INTERVAL, STATUS_REFRESH_READY_PER_CYCLE, STATUS_REFRESH_NEW_PER_CYCLE)
 
 
 def stop():

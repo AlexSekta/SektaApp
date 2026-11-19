@@ -23,7 +23,7 @@ def test_pdf_queue_only_with_scanit_and_stable_ordering():
             assert 'a.sticker_pdf IS NULL' in sql
             assert 'a.label_next_attempt_at<=now()' in sql
             assert "a.label_task_id IS NOT NULL OR" in sql
-            assert params == {'org': 2, 'limit': 2}
+            assert params == {'org': 2, 'limit': 2, 'max_retries': m.CREATE_429_MAX_RETRIES}
             return Mock(mappings=lambda: Mock(all=lambda: []))
     assert m.pdf_candidates(DB(), 2, 2) == []
 
@@ -61,7 +61,7 @@ def test_start_runs_independent_workers(monkeypatch):
     monkeypatch.setattr(m, 'PDF_ENABLED', True)
     monkeypatch.setattr(m, 'STARTED', False)
     m.start()
-    assert set(seen) == {'ozon-fbs-list','ozon-fbs-scanit','ozon-fbs-pdf'}
+    assert set(seen) == {'ozon-fbs-list','ozon-fbs-scanit','ozon-fbs-status','ozon-fbs-pdf'}
     m.stop()
     monkeypatch.setattr(m, 'STARTED', False)
     m.STOP.clear()

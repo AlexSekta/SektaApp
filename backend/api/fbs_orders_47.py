@@ -22,6 +22,7 @@ STATUS_GROUPS = {
     'awaiting_deliver': 'assembly',
     'delivering': 'delivery',
     'delivered': 'delivery',
+    'cancelled': 'cancelled',
 }
 
 
@@ -60,7 +61,7 @@ def _filters(from_day: date, to_day: date, query: str):
 
 
 def _base_where():
-    return '''organization_id=:org AND first_seen_at>=:start AND first_seen_at<:end
+    return '''organization_id=:org AND COALESCE(ozon_created_at, first_seen_at)>=:start AND COALESCE(ozon_created_at, first_seen_at)<:end
               AND (:query='' OR strpos(lower(concat_ws(' ', posting_number, order_number,
                            scanit, upper_barcode, lower_barcode)), lower(:query))>0)'''
 
@@ -69,6 +70,7 @@ def _group_sql():
     return """CASE WHEN status IN ('awaiting_packaging','awaiting_registration','acceptance_in_progress') THEN 'new'
                WHEN status='awaiting_deliver' THEN 'assembly'
                WHEN status IN ('delivering','delivered') THEN 'delivery'
+               WHEN status='cancelled' THEN 'cancelled'
                ELSE 'other' END"""
 
 
@@ -88,7 +90,7 @@ def orders_list(
     market = marketplace.upper()
     if market not in ('WB', 'OZON', 'YANDEX'):
         raise HTTPException(422, 'Неизвестный маркетплейс')
-    if status not in ('all','new','assembly','delivery'):
+    if status not in ('all','new','assembly','delivery','cancelled'):
         raise HTTPException(422, 'Неизвестный статус')
     params = _filters(date_from, date_to, q)
     if market != 'OZON':
@@ -102,9 +104,12 @@ def orders_list(
     summary = db.execute(text(f'''SELECT
          count(*) FILTER (WHERE grp='new')::integer AS new_count,
          count(*) FILTER (WHERE grp='assembly')::integer AS assembly_count,
+         count(*) FILTER (WHERE grp='assembly' AND has_pdf)::integer AS assembly_pdf_saved_count,
          count(*) FILTER (WHERE grp='delivery')::integer AS delivery_count,
+         count(*) FILTER (WHERE grp='cancelled')::integer AS cancelled_count,
          count(*)::integer AS all_count
-         FROM (SELECT {category} AS grp FROM ozon_fbs_sticker_archive WHERE {base}) x'''), params).mappings().one()
+         FROM (SELECT {category} AS grp, (sticker_pdf IS NOT NULL) AS has_pdf
+               FROM ozon_fbs_sticker_archive WHERE {base}) x'''), params).mappings().one()
     selection = f' AND ({category})=:status' if status != 'all' else ''
     total = db.execute(text(f'''SELECT count(*) FROM ozon_fbs_sticker_archive WHERE {base} {selection}'''), params).scalar_one()
     rows = db.execute(text(f'''SELECT posting_number, order_number, status, scanit,
@@ -113,7 +118,7 @@ def orders_list(
         sticker_saved_at, sticker_sha256, label_error,
         (sticker_pdf IS NOT NULL) AS has_pdf
         FROM ozon_fbs_sticker_archive WHERE {base} {selection}
-        ORDER BY first_seen_at DESC, posting_number DESC
+        ORDER BY COALESCE(ozon_created_at, first_seen_at) DESC, posting_number DESC
         LIMIT :limit OFFSET :offset'''), params).mappings().all()
     items = [{**dict(r), 'status_group': group_for_status(r['status'] or '')} for r in rows]
     return {'marketplace': market, 'available': True, 'items': items, 'total': total,

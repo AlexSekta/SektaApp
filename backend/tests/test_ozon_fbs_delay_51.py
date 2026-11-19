@@ -56,6 +56,6 @@ def test_pdf_candidate_query_is_guarded():
     m.pdf_candidates(db,2,5)
     sql=str(db.execute.call_args.args[0])
     assert 'auto_create_enabled' in sql
-    assert 'ready_from_new=true' in sql
+    assert 'a.ready_from_new=true' not in sql
     assert 'ready_detected_at' in sql
     assert 'label_requested_at IS NULL' in sql
